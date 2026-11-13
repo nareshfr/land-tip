@@ -1,4 +1,5 @@
 import { ZONE_CENTERS, EXACT_COORDS, BENGALURU_DATABASE } from './data/bengaluruLocations.js';
+import { analyzeParcel, runSimulation, listInfrastructure, checkHealth } from './api.js';
 
 const BASE_YEAR = 2026;
 const OFFSETS = [0, 1, 2, 3, 4, 5];
@@ -54,7 +55,11 @@ let state = {
   drawPoints: [],
   maskedArea: null,
   playing: false,
-  playTimer: null
+  playTimer: null,
+  backendData: null,
+  backendInfra: [],
+  backendLoading: false,
+  backendConnected: false
 };
 
 // Map Setup
@@ -116,6 +121,106 @@ function calcProjected(basePrice, cagr, offset) {
   return { price, diff, pct };
 }
 
+// --- Backend integration helpers ---
+
+function getProjectedPrice(offset) {
+  const target = getTarget();
+  if (state.backendData?.timeline?.length > offset) {
+    const entry = state.backendData.timeline[offset];
+    const price = Math.round(entry.land_value_per_sqft);
+    const basePrice = state.backendData.baseline?.price_per_sqft_inr
+      ? Math.round(state.backendData.baseline.price_per_sqft_inr)
+      : target.basePrice;
+    const diff = price - basePrice;
+    const pct = basePrice > 0 ? ((diff / basePrice) * 100).toFixed(1) : '0.0';
+    return { price, diff, pct };
+  }
+  return calcProjected(target.basePrice, target.cagr, offset);
+}
+
+function parseWktPoint(wkt) {
+  if (!wkt) return null;
+  const m = wkt.match(/POINT\s*\(\s*([-\d.]+)\s+([-\d.]+)\s*\)/i);
+  if (m) return [parseFloat(m[2]), parseFloat(m[1])]; // [lat, lon]
+  return null;
+}
+
+function polygonToGeoJSON(points) {
+  const coords = points.map((p) => [p[1], p[0]]); // [lng, lat]
+  coords.push(coords[0]); // close ring
+  return { type: 'Polygon', coordinates: [coords] };
+}
+
+async function fetchBackendData(locationName, geojson = null) {
+  state.backendLoading = true;
+  updateBackendStatus();
+
+  const parcelParams = {
+    location: locationName,
+    total_sqft: 2400,
+    bhk: 3,
+    bath: 2,
+    balcony: 1,
+    area_type: 'Plot  Area',
+    availability: 'Ready To Move',
+    society: 'Unknown'
+  };
+  if (geojson) parcelParams.geojson = geojson;
+
+  try {
+    const [analysis, sim] = await Promise.all([
+      analyzeParcel(parcelParams),
+      runSimulation(parcelParams, { years: 5, households: 50, developers: 5, seed: 42, initial_interest_rate: 8.5, capital_availability: 1.0 }, false)
+    ]);
+    state.backendData = {
+      location: locationName,
+      analysis,
+      baseline: sim.baseline,
+      timeline: sim.timeline,
+      future_valuation: sim.future_valuation,
+      summary: sim.summary,
+      run_id: sim.run_id
+    };
+    state.backendConnected = true;
+  } catch (err) {
+    state.backendData = null;
+    state.backendConnected = false;
+  } finally {
+    state.backendLoading = false;
+    updateBackendStatus();
+    renderUI();
+  }
+}
+
+function updateBackendStatus() {
+  const badge = document.getElementById('api-status-badge');
+  if (!badge) return;
+  badge.classList.remove('hidden');
+  if (state.backendLoading) {
+    badge.textContent = 'AI Computing…';
+    badge.className = 'text-[10px] font-semibold px-2 py-0.5 rounded-full bg-orange-500 text-white animate-pulse';
+  } else if (state.backendConnected && state.backendData) {
+    badge.textContent = 'AI Live';
+    badge.className = 'text-[10px] font-semibold px-2 py-0.5 rounded-full bg-emerald-600 text-white';
+  } else {
+    badge.textContent = 'AI Offline';
+    badge.className = 'text-[10px] font-semibold px-2 py-0.5 rounded-full bg-slate-400 text-white';
+  }
+}
+
+async function initBackend() {
+  const health = await checkHealth();
+  if (health.status !== 'ok') return;
+  state.backendConnected = true;
+  updateBackendStatus();
+  try {
+    const infraRes = await listInfrastructure();
+    state.backendInfra = infraRes.projects || [];
+  } catch { /* keep empty */ }
+  await fetchBackendData(state.activeArea.name);
+  renderMapOverlays();
+}
+
 const counterCache = {};
 function animateValue(id, targetVal, prefix = '', suffix = '') {
   const el = document.getElementById(id);
@@ -138,7 +243,7 @@ function getTarget() {
 }
 
 function buildMaskTooltip(target, offset) {
-  const { price, diff, pct } = calcProjected(target.basePrice, target.cagr, offset);
+  const { price, diff, pct } = getProjectedPrice(offset);
   const yr = offset === 0 ? 'Present (2026)' : `+${offset}Y (${BASE_YEAR + offset})`;
   return `
     <div style="font-family:'Helvetica Neue',Helvetica,Arial,sans-serif; min-width:185px; padding:2px;">
@@ -230,34 +335,71 @@ function renderMapOverlays() {
   }
 
   if (state.layers.infra && state.offset > 0) {
-    FUTURE_CATALYSTS.forEach((proj) => {
-      if (state.offset < proj.yearOffset) return;
-      L.circle(proj.coords, {
-        radius: 480,
-        color: '#f97316',
-        weight: 1.5,
-        dashArray: '4, 4',
-        fillColor: '#fb923c',
-        fillOpacity: 0.28
-      }).addTo(infraLayer);
+    // Use backend infrastructure when available; fall back to hardcoded catalysts
+    if (state.backendInfra.length) {
+      const statusColors = {
+        OPERATIONAL: '#059669',
+        UNDER_CONSTRUCTION: '#f97316',
+        APPROVED: '#3b82f6',
+        PROPOSED: '#94a3b8',
+        DELAYED: '#ef4444'
+      };
+      state.backendInfra.forEach((proj) => {
+        const coords = parseWktPoint(proj.geometry);
+        if (!coords) return;
+        const color = statusColors[proj.status] || '#94a3b8';
+        L.circle(coords, {
+          radius: 380,
+          color,
+          weight: 1.5,
+          dashArray: '4, 4',
+          fillColor: color,
+          fillOpacity: 0.25
+        }).addTo(infraLayer);
 
-      const calloutHtml = `
-        <div class="glass-panel spring-in rounded-2xl p-2.5 w-[200px] pointer-events-auto">
-          <div class="flex items-center justify-between">
-            <span class="text-[9px] font-bold uppercase px-1.5 py-0.5 rounded bg-slate-950 text-white tabular-nums">+${proj.yearOffset}Y (${BASE_YEAR + proj.yearOffset})</span>
-            <span class="text-[11px] font-bold text-emerald-600 tabular-nums">${proj.uplift}</span>
-          </div>
-          <div class="text-[11px] font-bold text-slate-900 mt-1 leading-snug">${proj.title}</div>
-          <div class="mt-1.5 flex items-center gap-1.5">
-            <div class="flex-1 h-2 rounded-full striped-track overflow-hidden p-0.5 border border-slate-300/60">
-              <div class="h-full rounded-full" style="width:${proj.progress}%; background:linear-gradient(90deg,#fdba74,#f97316);"></div>
+        const typeLabel = (proj.type || 'infra').toUpperCase();
+        const calloutHtml = `
+          <div class="glass-panel spring-in rounded-2xl p-2.5 w-[200px] pointer-events-auto">
+            <div class="flex items-center justify-between">
+              <span class="text-[9px] font-bold uppercase px-1.5 py-0.5 rounded text-white tabular-nums" style="background:${color}">${proj.status || 'PROPOSED'}</span>
+              <span class="text-[11px] font-bold text-slate-600 tabular-nums">${typeLabel}</span>
             </div>
-            <span class="text-[10px] font-bold text-slate-800 tabular-nums">${proj.progress}%</span>
+            <div class="text-[11px] font-bold text-slate-900 mt-1 leading-snug">${proj.name}</div>
+            <div class="text-[10px] text-slate-500 mt-0.5">Source: ${proj.source || 'N/A'}</div>
           </div>
-        </div>
-      `;
-      L.marker(proj.coords, { icon: L.divIcon({ html: calloutHtml, iconSize: [200, 74], iconAnchor: [100, 82] }) }).addTo(infraLayer);
-    });
+        `;
+        L.marker(coords, { icon: L.divIcon({ html: calloutHtml, iconSize: [200, 64], iconAnchor: [100, 72] }) }).addTo(infraLayer);
+      });
+    } else {
+      FUTURE_CATALYSTS.forEach((proj) => {
+        if (state.offset < proj.yearOffset) return;
+        L.circle(proj.coords, {
+          radius: 480,
+          color: '#f97316',
+          weight: 1.5,
+          dashArray: '4, 4',
+          fillColor: '#fb923c',
+          fillOpacity: 0.28
+        }).addTo(infraLayer);
+
+        const calloutHtml = `
+          <div class="glass-panel spring-in rounded-2xl p-2.5 w-[200px] pointer-events-auto">
+            <div class="flex items-center justify-between">
+              <span class="text-[9px] font-bold uppercase px-1.5 py-0.5 rounded bg-slate-950 text-white tabular-nums">+${proj.yearOffset}Y (${BASE_YEAR + proj.yearOffset})</span>
+              <span class="text-[11px] font-bold text-emerald-600 tabular-nums">${proj.uplift}</span>
+            </div>
+            <div class="text-[11px] font-bold text-slate-900 mt-1 leading-snug">${proj.title}</div>
+            <div class="mt-1.5 flex items-center gap-1.5">
+              <div class="flex-1 h-2 rounded-full striped-track overflow-hidden p-0.5 border border-slate-300/60">
+                <div class="h-full rounded-full" style="width:${proj.progress}%; background:linear-gradient(90deg,#fdba74,#f97316);"></div>
+              </div>
+              <span class="text-[10px] font-bold text-slate-800 tabular-nums">${proj.progress}%</span>
+            </div>
+          </div>
+        `;
+        L.marker(proj.coords, { icon: L.divIcon({ html: calloutHtml, iconSize: [200, 74], iconAnchor: [100, 82] }) }).addTo(infraLayer);
+      });
+    }
   }
 
   if (state.maskedArea && state.maskedArea.polygonLayer) {
@@ -267,7 +409,7 @@ function renderMapOverlays() {
 
 function renderUI() {
   const target = getTarget();
-  const { price, diff, pct } = calcProjected(target.basePrice, target.cagr, state.offset);
+  const { price, diff, pct } = getProjectedPrice(state.offset);
   const builtNow = Math.min(97, target.builtUp + state.offset * 2);
 
   document.getElementById('pill-builtup').textContent = builtNow + '%';
@@ -291,20 +433,47 @@ function renderUI() {
   document.getElementById('an-metro-dist').textContent = target.metroKm + ' km';
   document.getElementById('an-landmarks-count').textContent = state.liveLandmarks.length;
   document.getElementById('an-builtup').textContent = builtNow + '%';
-  document.getElementById('an-r2').textContent = 'R² = 0.81';
-  document.getElementById('an-cagr-badge').textContent = `CAGR ${(target.cagr * 100).toFixed(1)}%`;
 
-  analysisChart.data.datasets[0].data = OFFSETS.map((o) => calcProjected(target.basePrice, target.cagr, o).price);
+  // Use backend confidence when available, fall back to static R²
+  const confidence = state.backendData?.baseline?.confidence;
+  document.getElementById('an-r2').textContent = confidence
+    ? `Confidence ${Math.round(confidence * 100)}%`
+    : 'R² = 0.81';
+
+  // CAGR from backend timeline when available
+  if (state.backendData?.timeline?.length > 1) {
+    const firstPrice = state.backendData.timeline[0]?.land_value_per_sqft || price;
+    const lastPrice = state.backendData.timeline[state.backendData.timeline.length - 1]?.land_value_per_sqft || price;
+    const cagr = firstPrice > 0 ? (Math.pow(lastPrice / firstPrice, 1 / (OFFSETS.length - 1)) - 1) * 100 : 0;
+    document.getElementById('an-cagr-badge').textContent = `CAGR ${cagr.toFixed(1)}%`;
+  } else {
+    document.getElementById('an-cagr-badge').textContent = `CAGR ${(target.cagr * 100).toFixed(1)}%`;
+  }
+
+  analysisChart.data.datasets[0].data = OFFSETS.map((o) => getProjectedPrice(o).price);
   analysisChart.data.datasets[0].pointRadius = OFFSETS.map((o) => (o === state.offset ? 6 : 3.5));
   analysisChart.data.datasets[0].pointBackgroundColor = OFFSETS.map((o) => (o === state.offset ? '#f97316' : '#0f172a'));
   analysisChart.update('none');
 
-  const drivers = [
-    { label: 'Metro Station Proximity', pct: 38 },
-    { label: 'Built-Up & Satellite Expansion', pct: 27 },
-    { label: 'Commercial & Tech Hub Access', pct: 22 },
-    { label: 'Road & Arterial Connectivity', pct: 13 }
-  ];
+  // Driver attribution: backend future_valuation.drivers when available, else static
+  let drivers;
+  if (state.backendData?.future_valuation?.drivers) {
+    const d = state.backendData.future_valuation.drivers;
+    const total = Math.abs(d.demand_pressure || 0) + Math.abs(d.infrastructure || 0) + Math.abs(d.macro_risk || 0) || 1;
+    drivers = [
+      { label: 'Demand Pressure', pct: Math.round(Math.abs(d.demand_pressure || 0) / total * 100) },
+      { label: 'Infrastructure Catalysts', pct: Math.round(Math.abs(d.infrastructure || 0) / total * 100) },
+      { label: 'Macro Risk / Interest Rate', pct: Math.round(Math.abs(d.macro_risk || 0) / total * 100) },
+      { label: 'Active Infra Nearby', pct: Math.min(100, (state.backendData.timeline?.[state.offset]?.active_infrastructure || 0) * 15) }
+    ];
+  } else {
+    drivers = [
+      { label: 'Metro Station Proximity', pct: 38 },
+      { label: 'Built-Up & Satellite Expansion', pct: 27 },
+      { label: 'Commercial & Tech Hub Access', pct: 22 },
+      { label: 'Road & Arterial Connectivity', pct: 13 }
+    ];
+  }
   document.getElementById('an-drivers').innerHTML = drivers.map((d) => `
     <div>
       <div class="flex justify-between text-xs mb-1">
@@ -321,6 +490,23 @@ function renderUI() {
   lmListEl.innerHTML = state.liveLandmarks.length
     ? state.liveLandmarks.map((l) => `<div class="flex justify-between p-2 rounded-xl bg-slate-100/80"><span class="font-medium text-slate-800">${l.name}</span><span class="uppercase text-[10px] font-bold text-slate-500">${l.kind}</span></div>`).join('')
     : '<div class="text-slate-500">Select or search any location to sync live nearby OSM landmarks.</div>';
+
+  // Spatial buffer impact from backend parcel analysis
+  const bufferSection = document.getElementById('buffer-impact-section');
+  if (state.backendData?.analysis?.buffers?.length) {
+    bufferSection.classList.remove('hidden');
+    bufferSection.innerHTML = state.backendData.analysis.buffers.map((b) => {
+      const label = b.radius_m >= 1000 ? `${b.radius_m / 1000}km` : `${b.radius_m}m`;
+      return `
+        <div class="bg-white/80 border border-slate-200/80 rounded-2xl p-4">
+          <div class="text-[11px] text-slate-500 uppercase tracking-wider">${label} Buffer</div>
+          <div class="text-2xl font-bold text-slate-950 tabular-nums mt-1">${b.project_count}</div>
+          <div class="text-xs text-slate-500 mt-0.5">${b.project_count === 1 ? 'project' : 'projects'} nearby</div>
+        </div>`;
+    }).join('');
+  } else {
+    bufferSection.classList.add('hidden');
+  }
 
   renderMapOverlays();
 }
@@ -348,6 +534,7 @@ async function selectLocationItem(item) {
   map.flyTo(targetCoords, 14, { duration: 0.75 });
   renderUI();
   fetchLiveLandmarks(targetCoords[0], targetCoords[1]);
+  fetchBackendData(item.name);
 }
 
 // Search Bar Autocomplete across ALL 250+ items
@@ -544,6 +731,8 @@ function finishDraw() {
   poly.on('click', openAnalysisView);
   renderUI();
   fetchLiveLandmarks(center.lat, center.lng);
+  const geojson = polygonToGeoJSON(state.drawPoints);
+  fetchBackendData(state.activeArea.name, geojson);
 }
 
 drawBtn.addEventListener('click', startDraw);
@@ -596,3 +785,4 @@ document.getElementById('play-btn').addEventListener('click', () => {
 // Initial render
 renderUI();
 fetchLiveLandmarks(state.activeArea.coords[0], state.activeArea.coords[1]);
+initBackend();

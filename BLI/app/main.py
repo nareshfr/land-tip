@@ -18,6 +18,7 @@ from __future__ import annotations
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
 
 from app import __version__
 from app.api import ROUTERS
@@ -42,6 +43,15 @@ app = FastAPI(
     ),
     version=__version__,
     lifespan=lifespan,
+)
+
+# Allow the land-tip frontend (and any dev origin) to call the API.
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
 )
 
 
