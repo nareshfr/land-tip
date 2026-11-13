@@ -25,6 +25,7 @@ from typing import Optional
 
 from app.config import get_settings
 from app.schemas import BaselineValuation
+from app.baseline.land_adjust import LandBaselineAdjuster, apply_land_confidence
 
 logger = logging.getLogger(__name__)
 
@@ -114,10 +115,30 @@ class BaselineSeed:
 
         confidence = self._confidence(raw, total_sqft)
 
+        # Phase 1 (v1.1): verify the baseline asset type. The CatBoost model is a
+        # house-price model; derive a land-only baseline from its prediction.
+        is_plot = bool(feature_vector.get("is_plot", 0))
+        adjuster = LandBaselineAdjuster()
+        adj = adjuster.adjust(
+            house_price_lakhs=raw["predicted_price_lakhs"],
+            total_sqft=total_sqft,
+            area_type=area_type,
+            is_plot=is_plot,
+        )
+        land_price_lakhs = adj.land_price_lakhs
+        land_price_inr = int(round(land_price_lakhs * 100_000.0))
+        land_ppsqft = round(land_price_inr / float(total_sqft), 2)
+        confidence = apply_land_confidence(confidence)
+
+        baseline_raw = dict(raw)
+        baseline_raw["house_price_lakhs"] = adj.house_price_lakhs
+        baseline_raw["structure_value_lakhs"] = adj.structure_value_lakhs
+        baseline_raw["baseline_note"] = adj.note
+
         return BaselineValuation(
-            predicted_price_lakhs=raw["predicted_price_lakhs"],
-            predicted_price_inr=raw["predicted_price_inr"],
-            price_per_sqft_inr=raw["price_per_sqft_inr"],
+            predicted_price_lakhs=round(land_price_lakhs, 2),
+            predicted_price_inr=land_price_inr,
+            price_per_sqft_inr=land_ppsqft,
             location_used=raw["location_used"],
             total_sqft=raw["total_sqft"],
             bhk=raw["bhk"],
@@ -125,7 +146,10 @@ class BaselineSeed:
             area_type=raw["area_type"],
             confidence=confidence,
             feature_vector=feature_vector,
-            raw=raw,
+            asset_type=adj.asset_type,
+            baseline_method=adj.baseline_method,
+            house_price_lakhs=adj.house_price_lakhs,
+            raw=baseline_raw,
         )
 
     # --- internals ---

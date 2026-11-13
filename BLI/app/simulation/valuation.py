@@ -43,9 +43,29 @@ def compute_future_valuation(
 
     # Attribute index movement to the model's recorded drivers.
     appreciation = final_index - 1.0
-    demand_contrib = _sum_field(timeline, "demand_pressure") * 0.05
-    risk_contrib = -_max_field(timeline, "risk_multiplier") * 0.0 + _rate_drag(timeline)
-    infra_contrib = _infra_gain(timeline)
+    has_v11 = any(bool(t.get("growth")) for t in timeline[1:])
+    if has_v11:
+        demand_contrib = sum(t.get("growth", {}).get("g_demand", 0.0) for t in timeline[1:])
+        infra_contrib = sum(t.get("growth", {}).get("g_infra", 0.0) for t in timeline[1:])
+        risk_contrib = -sum(t.get("growth", {}).get("g_risk", 0.0) for t in timeline[1:])
+        market_contrib = sum(t.get("growth", {}).get("g_market", 0.0) for t in timeline[1:])
+        scarcity_contrib = sum(t.get("growth", {}).get("g_scarity", 0.0) for t in timeline[1:])
+        drivers = {
+            "demand_pressure": round(demand_contrib, 4),
+            "infrastructure": round(infra_contrib, 4),
+            "macro_risk": round(risk_contrib, 4),
+            "market_baseline": round(market_contrib, 4),
+            "scarcity": round(scarcity_contrib, 4),
+        }
+    else:
+        demand_contrib = _sum_field(timeline, "demand_pressure") * 0.05
+        risk_contrib = -_max_field(timeline, "risk_multiplier") * 0.0 + _rate_drag(timeline)
+        infra_contrib = _infra_gain(timeline)
+        drivers = {
+            "demand_pressure": round(demand_contrib, 4),
+            "infrastructure": round(infra_contrib, 4),
+            "macro_risk": round(risk_contrib, 4),
+        }
 
     return {
         "baseline_price_lakhs": round(
@@ -57,11 +77,7 @@ def compute_future_valuation(
         "future_price_per_sqft": round(future_ppsqft, 2),
         "land_value_index": round(final_index, 4),
         "appreciation_pct": round(appreciation * 100.0, 2),
-        "drivers": {
-            "demand_pressure": round(demand_contrib, 4),
-            "infrastructure": round(infra_contrib, 4),
-            "macro_risk": round(risk_contrib, 4),
-        },
+        "drivers": drivers,
         "horizon_years": len(timeline) - 1 if timeline else 0,
     }
 

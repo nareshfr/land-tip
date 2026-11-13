@@ -126,6 +126,33 @@ Format per entry:
 - Added `.env.example`, `pyproject.toml` (setuptools + pytest config),
   `README.md`, and this `IMPLEMENTATION_LOG.md`.
 
+### 2026-11-13 — Version 1.1 Architecture & Simulation Enhancement
+
+- **Phase 1 (Baseline Verification)**:
+  - Created `app/baseline/land_adjust.py` (`LandBaselineAdjuster`, `apply_land_confidence`).
+  - Deduces structure value from built properties ($P_{land} = P_{house} - \text{Structure}$, floored at 40%), directly values plot records, applies confidence penalty for house-model derivation.
+- **Phase 2 (Infrastructure Impact Engine)**:
+  - Created `app/impact/engine.py` (`InfrastructureImpactEngine`).
+  - Distance-decay influence $I = S \cdot e^{-d/\lambda} \cdot \text{status\_factor}$.
+  - Computes continuous accessibility, employment, amenity, commercial, and composite influence scores. Connected to `HouseholdAgent`, `DeveloperAgent`, and `UrbanAlphaModel`.
+- **Phase 3 (Market Dynamics Engine)**:
+  - Created `app/market/dynamics.py` (`MarketDynamicsEngine`, `MarketState`, `YearGrowth`).
+  - Balances demand, developer decisions, and land supply; derives $g_t = g_{\text{market}} + g_{\text{demand}} + g_{\text{scarcity}} - g_{\text{risk}}$ with $g_{\text{infra}}$ partitioning demand growth without double counting.
+- **Phase 4 (Historical Market Calibration Engine)**:
+  - Created `app/calibration/data.py` (starter historical land prices for Bengaluru localities) and `app/calibration/engine.py` (`HistoricalCalibrationEngine`).
+  - Calibrates baseline CAGR, demand/scarcity/infrastructure/risk sensitivities, and scarcity index with calibration/validation split.
+- **Phase 5 (Infrastructure Development Agent)**:
+  - Created `app/agents/infrastructure_agent.py` (`InfrastructureDevelopmentAgent`).
+  - Constrained stage progression (funding, approvals, land acquisition, delays). Wired into Mesa step loop in `UrbanAlphaModel`.
+- **Phase 6 (Scenario Simulation & Backtesting)**:
+  - Added `run_scenarios` and `run_backtest` to `app/services/simulation_service.py`.
+  - Added endpoints `POST /simulation/scenarios` and `POST /simulation/backtest` in `app/api/simulation.py`.
+  - Added frontend client methods `runScenarios` and `runBacktest` in `land-tip/src/api.js`.
+- **Verification**:
+  - 44 pytest unit and integration tests passing (`tests/test_land_baseline.py`, `tests/test_impact.py`, `tests/test_market.py`, `tests/test_calibration.py`, `tests/test_infrastructure_agent.py`, `tests/test_scenarios_backtest.py`).
+  - Doddaballapur 3-scenario validation confirmed: Scenario C (+79.3%) > Scenario B (+40.6%) > Scenario A (+8.9%).
+  - Frontend production build verified (`npx vite build`).
+
 ---
 
 <!-- Append future changes below this line, newest at the bottom. -->

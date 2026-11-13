@@ -34,6 +34,11 @@ def build_model(
         initial_interest_rate=config.initial_interest_rate,
         capital_availability=config.capital_availability,
         seed=config.seed,
+        parcel_centroid=parcel_centroid,
+        locality=getattr(baseline, "location_used", ""),
+        use_infrastructure_agent=getattr(config, "use_infrastructure_agent", True),
+        use_market_dynamics=getattr(config, "use_market_dynamics", True),
+        use_impact_engine=getattr(config, "use_impact_engine", True),
     )
     model.set_within_2km(within_ids)
     return model

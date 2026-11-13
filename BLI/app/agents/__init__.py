@@ -12,6 +12,7 @@
 """
 
 from app.agents.demand import HouseholdAgent
+from app.agents.infrastructure_agent import InfrastructureDevelopmentAgent
 from app.agents.macro import MacroeconomicAgent
 from app.agents.model import UrbanAlphaModel
 from app.agents.supply import DeveloperAgent
@@ -20,5 +21,6 @@ __all__ = [
     "MacroeconomicAgent",
     "HouseholdAgent",
     "DeveloperAgent",
+    "InfrastructureDevelopmentAgent",
     "UrbanAlphaModel",
 ]

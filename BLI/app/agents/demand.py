@@ -38,29 +38,33 @@ class HouseholdAgent(mesa.Agent):
         m = self.model
         rng = m.random
 
-        # Accessibility: operational transit (metro/road/suburban_rail) near parcel.
-        access_projects = m.active_nearby_projects(types=(
-            InfrastructureType.METRO, InfrastructureType.ROAD,
-            InfrastructureType.SUBURBAN_RAIL, InfrastructureType.FLYOVER,
-        ), status=ProjectStatus.OPERATIONAL)
-        accessibility = min(1.0, 0.2 + 0.15 * len(access_projects))
+        # v1.1: Use continuous distance-decayed Impact Engine scores if available.
+        if getattr(m, "impact_scores", None) is not None:
+            accessibility = min(1.5, 0.20 + m.impact_scores.accessibility)
+            employment = min(1.5, 0.25 + m.impact_scores.employment)
+            amenity = min(1.5, 0.10 + m.impact_scores.amenity)
+        else:
+            # Fallback legacy buffer counts.
+            access_projects = m.active_nearby_projects(types=(
+                InfrastructureType.METRO, InfrastructureType.ROAD,
+                InfrastructureType.SUBURBAN_RAIL, InfrastructureType.FLYOVER,
+            ), status=ProjectStatus.OPERATIONAL)
+            accessibility = min(1.0, 0.2 + 0.15 * len(access_projects))
 
-        # Employment: operational commercial + transit that improves job access.
-        employ_projects = m.active_nearby_projects(types=(
-            InfrastructureType.COMMERCIAL, InfrastructureType.METRO,
-        ), status=ProjectStatus.OPERATIONAL)
-        employment = min(1.0, 0.25 + 0.12 * len(employ_projects))
+            employ_projects = m.active_nearby_projects(types=(
+                InfrastructureType.COMMERCIAL, InfrastructureType.METRO,
+            ), status=ProjectStatus.OPERATIONAL)
+            employment = min(1.0, 0.25 + 0.12 * len(employ_projects))
 
-        # Amenity: parks and lake restoration near the parcel.
-        amenity_projects = m.active_nearby_projects(types=(
-            InfrastructureType.PARK, InfrastructureType.LAKE_RESTORATION,
-        ), status=ProjectStatus.OPERATIONAL)
-        amenity = min(1.0, 0.1 + 0.10 * len(amenity_projects))
+            amenity_projects = m.active_nearby_projects(types=(
+                InfrastructureType.PARK, InfrastructureType.LAKE_RESTORATION,
+            ), status=ProjectStatus.OPERATIONAL)
+            amenity = min(1.0, 0.1 + 0.10 * len(amenity_projects))
 
         # Housing cost: current land value per sqft normalised against baseline.
         current_ppsqft = m.land_value_per_sqft or self.baseline_ppsqft
         cost_ratio = current_ppsqft / max(1.0, self.baseline_ppsqft)
-        housing_cost = min(1.5, max(0.0, (cost_ratio - 1.0) * 2.0))
+        housing_cost = min(1.2, max(0.0, (cost_ratio - 1.0) * 0.40))
 
         # Add idiosyncratic preference noise scaled by income.
         noise = rng.gauss(0.0, 0.05) * self.income_multiplier

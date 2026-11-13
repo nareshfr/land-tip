@@ -43,6 +43,22 @@ class Settings(BaseSettings):
     # Spatial buffer radii in metres.
     buffer_radii_m: tuple[int, ...] = (500, 1000, 2000)
 
+    # --- v1.1 baseline asset verification ---------------------------------
+    # The pre-existing CatBoost model is a *house*-price model. UrbanAlpha's
+    # target is *land* valuation, so by default we derive a land-only baseline
+    # from the house-price prediction (strip estimated structure value for
+    # built properties; plot records are already land-valued). Set to "house"
+    # to use the raw house-price prediction unchanged (legacy behaviour).
+    baseline_asset_type: str = "land"
+    # Construction cost per sqft (INR) used to estimate structure value.
+    construction_rate_per_sqft: float = 2500.0
+    # Floor for derived land value as a fraction of the house-price prediction,
+    # so the adjustment can never go negative or implausibly low.
+    land_value_floor_pct: float = 0.40
+    # Confidence penalty applied when the baseline is derived from a
+    # house-price model rather than a dedicated land-price model.
+    land_model_confidence_penalty: float = 0.9
+
     # Bengaluru reference centroid used to approximate metres <-> degrees.
     # lat 12.9716, lon 77.5946. 1 deg lat ~= 110.574 km; 1 deg lon ~= cos(lat)*111.32 km.
     bengaluru_lat: float = 12.9716

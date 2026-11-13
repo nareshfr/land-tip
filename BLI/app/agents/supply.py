@@ -48,7 +48,8 @@ class DeveloperAgent(mesa.Agent):
 
         # Expected revenue/sqft: baseline * demand pressure * zoning allowance.
         demand_pressure = max(0.5, min(2.0, 1.0 + m.demand_pressure))
-        expected_revenue = self.baseline_ppsqft * demand_pressure * m.zoning_factor
+        comm_boost = (1.0 + 0.10 * m.impact_scores.commercial) if getattr(m, "impact_scores", None) else 1.0
+        expected_revenue = self.baseline_ppsqft * demand_pressure * m.zoning_factor * comm_boost
 
         # Reservation price rises with land value so future land cost tracks the market.
         self.reservation_ppsqft = max(

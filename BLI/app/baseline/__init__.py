@@ -6,5 +6,12 @@ expectation relative to the output of :func:`baseline_valuation`.
 """
 
 from app.baseline.seed import BaselineSeed, get_seed, baseline_valuation
+from app.baseline.land_adjust import LandBaselineAdjuster, apply_land_confidence
 
-__all__ = ["BaselineSeed", "get_seed", "baseline_valuation"]
+__all__ = [
+    "BaselineSeed",
+    "get_seed",
+    "baseline_valuation",
+    "LandBaselineAdjuster",
+    "apply_land_confidence",
+]

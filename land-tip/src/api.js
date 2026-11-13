@@ -71,6 +71,42 @@ export async function runSimulation(parcel, config = {}, scrapeFirst = false) {
 }
 
 /**
+ * POST /simulation/scenarios — evaluate parcel across alternative development scenarios.
+ * @param {object} parcel — ParcelRequest fields
+ * @param {Array<object>} scenarios — optional scenario configs
+ * @param {object} config — SimulationConfig
+ * @returns {Promise<object>} ScenarioRunResponse
+ */
+export async function runScenarios(parcel, scenarios = [], config = {}) {
+  const payload = { parcel, scenarios, config };
+  const res = await timedFetch('runScenarios', `${API_BASE_URL}/simulation/scenarios`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload)
+  });
+  if (!res.ok) throw new Error(`Scenario run failed: ${res.status}`);
+  return res.json();
+}
+
+/**
+ * POST /simulation/backtest — historical backtest against observed Bengaluru land prices.
+ * @param {Array<string>} localities — locality list
+ * @param {number} startYear
+ * @param {number} horizonYears
+ * @returns {Promise<object>} BacktestResult
+ */
+export async function runBacktest(localities = [], startYear = 2019, horizonYears = 5) {
+  const payload = { localities, start_year: startYear, horizon_years: horizonYears };
+  const res = await timedFetch('runBacktest', `${API_BASE_URL}/simulation/backtest`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload)
+  });
+  if (!res.ok) throw new Error(`Backtest failed: ${res.status}`);
+  return res.json();
+}
+
+/**
  * GET /simulation/{runId} — fetch a stored simulation run.
  * @param {string} runId
  * @returns {Promise<object>} SimulationFetchResponse

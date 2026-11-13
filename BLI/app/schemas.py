@@ -32,9 +32,14 @@ class InfrastructureType(str, Enum):
     ROAD = "road"
     FLYOVER = "flyover"
     SUBURBAN_RAIL = "suburban_rail"
+    RAILWAY = "railway"
+    HIGHWAY = "highway"
     PARK = "park"
     LAKE_RESTORATION = "lake_restoration"
     COMMERCIAL = "commercial"
+    IT_PARK = "it_park"
+    INDUSTRIAL_PARK = "industrial_park"
+    EDUCATIONAL = "educational"
     OTHER = "other"
 
 
@@ -72,7 +77,13 @@ class InfrastructureSchema(BaseModel):
 # ---------------------------------------------------------------------------
 
 class BaselineValuation(BaseModel):
-    """Year-0 valuation seed produced by the pre-existing CatBoost model."""
+    """Year-0 valuation seed produced by the pre-existing CatBoost model.
+
+    v1.1: when ``asset_type == "land"`` the price fields carry a *land-only*
+    baseline derived from the house-price prediction (structure value stripped
+    for built properties; plot records are already land-valued). The raw
+    house-price prediction is preserved in ``raw`` for traceability.
+    """
 
     predicted_price_lakhs: float
     predicted_price_inr: int
@@ -84,6 +95,11 @@ class BaselineValuation(BaseModel):
     area_type: str
     confidence: float = Field(..., ge=0.0, le=1.0)
     feature_vector: dict
+    # v1.1 baseline-verification additions.
+    asset_type: str = "land"
+    baseline_method: str = "land_adjusted"
+    # Original house-price prediction (lakhs) before land adjustment, if any.
+    house_price_lakhs: Optional[float] = None
     # Copy of the raw model output for traceability.
     raw: dict
 
@@ -150,6 +166,9 @@ class SimulationConfig(BaseModel):
     seed: int = 42
     initial_interest_rate: float = 8.5  # percent, RBI/home-loan proxy
     capital_availability: float = 1.0   # multiplier on developer capital
+    use_infrastructure_agent: bool = True
+    use_market_dynamics: bool = True
+    use_impact_engine: bool = True
 
 
 class SimulationRunRequest(BaseModel):
@@ -165,11 +184,19 @@ class TimelineEntry(BaseModel):
     interest_rate: float
     capital_availability: float
     risk_multiplier: float
+    zoning_factor: float = 1.0
     mean_demand_utility: float
     mean_developer_profit_margin: float
+    developed_units: int = 0
+    demand_pressure: float = 0.0
+    supply_pressure: float = 0.0
     land_value_per_sqft: float
     land_value_index: float  # relative to Year 0 = 1.0
     active_infrastructure: int
+    # v1.1 explainability: per-year market state + growth decomposition.
+    impact: dict = Field(default_factory=dict)
+    market: dict = Field(default_factory=dict)
+    growth: dict = Field(default_factory=dict)
     events: list[dict] = Field(default_factory=list)
 
 
@@ -195,3 +222,75 @@ class SimulationFetchResponse(BaseModel):
     future_valuation: Optional[dict] = None
     summary: Optional[dict] = None
     created_at: Optional[str] = None
+
+
+# ---------------------------------------------------------------------------
+# v1.1: Scenario simulation
+# ---------------------------------------------------------------------------
+
+class ScenarioConfig(BaseModel):
+    """Scenario identity + overrides applied to the same baseline parcel.
+
+    Scenarios let the same parcel be evaluated under different urban-development
+    futures (no development, industrial development, industrial + infrastructure,
+    etc.). Overrides are merged into the parcel request and the project set.
+    """
+
+    name: str = Field("baseline", description="Scenario identifier.")
+    description: str = ""
+    # Extra / override infrastructure projects to inject for this scenario.
+    infrastructure: list[dict] = Field(default_factory=list)
+    # Parcel request overrides (e.g. a different locality).
+    parcel_overrides: dict = Field(default_factory=dict)
+    # Simulation config overrides.
+    config_overrides: dict = Field(default_factory=dict)
+
+
+class ScenarioRunRequest(BaseModel):
+    parcel: ParcelRequest
+    scenarios: list[ScenarioConfig] = Field(default_factory=list)
+    config: SimulationConfig = Field(default_factory=SimulationConfig)
+    scrape_first: bool = False
+
+
+class ScenarioResult(BaseModel):
+    name: str
+    description: str
+    run_id: Optional[str] = None
+    future_valuation: dict
+    summary: dict
+    timeline: list[TimelineEntry] = Field(default_factory=list)
+
+
+class ScenarioRunResponse(BaseModel):
+    parcel_id: str
+    baseline: BaselineValuation
+    scenarios: list[ScenarioResult]
+
+
+# ---------------------------------------------------------------------------
+# v1.1: Backtesting
+# ---------------------------------------------------------------------------
+
+class BacktestPoint(BaseModel):
+    locality: str
+    start_year: int
+    horizon_years: int
+    predicted_lakhs: float
+    observed_lakhs: float
+    error_lakhs: float
+    error_pct: float
+
+
+class BacktestResult(BaseModel):
+    run_id: str
+    points: list[BacktestPoint]
+    metrics: dict
+    created_at: str
+
+
+class BacktestRequest(BaseModel):
+    localities: list[str] = Field(default_factory=list)
+    start_year: int = 2019
+    horizon_years: int = 5
+    seed: int = 42

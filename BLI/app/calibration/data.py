@@ -1,0 +1,120 @@
+"""Starter historical land-price observations for Bengaluru localities.
+
+These are **illustrative** price-per-sqft (INR) land observations per locality
+per year, structured exactly as the spec's required fields. They exist so the
+calibration engine and backtests are runnable end-to-end without an external
+dataset; replace ``LOCALITY_HISTORY`` with real registered-transaction
+observations (asking prices, registered prices, and estimated market prices
+kept separate) to make the calibrated parameters authoritative.
+
+The localities match the spec (Whitefield, Sarjapur, Electronic City, Hebbal,
+Devanahalli, Doddaballapur, Yelahanka, Kanakapura Road) plus the localities
+already used by the spatial geocoder, so calibration covers every parcel the
+API can be asked about.
+"""
+
+from __future__ import annotations
+
+
+def _row(locality: str, year: int, price: float) -> dict:
+    return {
+        "locality": locality,
+        "year": year,
+        "land_price_per_sqft": float(price),
+        "property_type": "residential land",
+        "transaction_source": "registered",
+        "infrastructure_context": "",
+    }
+
+
+# Each observation: locality, year, land_price_per_sqft (INR), property_type,
+# transaction_source, infrastructure_context.
+LOCALITY_HISTORY: list[dict] = [
+    # --- Whitefield (metro + IT corridor) ---
+    *(_row("whitefield", y, p) for y, p in [
+        (2015, 3200), (2016, 3600), (2017, 4100), (2018, 4800), (2019, 5600),
+        (2020, 6100), (2021, 6900), (2022, 7800), (2023, 8700), (2024, 9600),
+    ]),
+    # --- Sarjapur Road (IT tech-park hub) ---
+    *(_row("sarjapur road", y, p) for y, p in [
+        (2015, 2800), (2016, 3100), (2017, 3500), (2018, 4100), (2019, 4800),
+        (2020, 5300), (2021, 6000), (2022, 6800), (2023, 7600), (2024, 8400),
+    ]),
+    # --- Electronic City ---
+    *(_row("electronic city", y, p) for y, p in [
+        (2015, 2400), (2016, 2700), (2017, 3000), (2018, 3400), (2019, 3900),
+        (2020, 4300), (2021, 4900), (2022, 5500), (2023, 6100), (2024, 6800),
+    ]),
+    # --- Hebbal (outer ring road + airport corridor) ---
+    *(_row("hebbal", y, p) for y, p in [
+        (2015, 3000), (2016, 3300), (2017, 3700), (2018, 4200), (2019, 4900),
+        (2020, 5400), (2021, 6100), (2022, 6900), (2023, 7700), (2024, 8500),
+    ]),
+    # --- Devanahalli (airport influence) ---
+    *(_row("devanahalli", y, p) for y, p in [
+        (2015, 1200), (2016, 1400), (2017, 1600), (2018, 1900), (2019, 2200),
+        (2020, 2400), (2021, 2700), (2022, 3100), (2023, 3500), (2024, 3900),
+    ]),
+    # --- Doddaballapur (industrial-park corridor) ---
+    *(_row("doddaballapur", y, p) for y, p in [
+        (2015, 900), (2016, 1000), (2017, 1150), (2018, 1350), (2019, 1550),
+        (2020, 1700), (2021, 1950), (2022, 2250), (2023, 2600), (2024, 3000),
+    ]),
+    # --- Yelahanka ---
+    *(_row("yelahanka", y, p) for y, p in [
+        (2015, 2200), (2016, 2500), (2017, 2800), (2018, 3200), (2019, 3700),
+        (2020, 4100), (2021, 4700), (2022, 5300), (2023, 5900), (2024, 6600),
+    ]),
+    # --- Kanakapura Road ---
+    *(_row("kanakapura road", y, p) for y, p in [
+        (2015, 2000), (2016, 2300), (2017, 2600), (2018, 3000), (2019, 3500),
+        (2020, 3900), (2021, 4400), (2022, 5000), (2023, 5600), (2024, 6300),
+    ]),
+    # --- Koramangala / Indiranagar / HSR (mature, scarce) ---
+    *(_row("koramangala", y, p) for y, p in [
+        (2015, 9000), (2016, 10200), (2017, 11500), (2018, 13000), (2019, 14500),
+        (2020, 15800), (2021, 17200), (2022, 18800), (2023, 20500), (2024, 22000),
+    ]),
+    *(_row("indiranagar", y, p) for y, p in [
+        (2015, 11000), (2016, 12500), (2017, 14200), (2018, 16000), (2019, 17800),
+        (2020, 19200), (2021, 20800), (2022, 22500), (2023, 24200), (2024, 26000),
+    ]),
+    *(_row("hsr layout", y, p) for y, p in [
+        (2015, 6000), (2016, 6800), (2017, 7700), (2018, 8800), (2019, 10000),
+        (2020, 11000), (2021, 12000), (2022, 13200), (2023, 14400), (2024, 15600),
+    ]),
+    # --- Marathahalli / JP Nagar / Jayanagar ---
+    *(_row("marathahalli", y, p) for y, p in [
+        (2015, 4200), (2016, 4700), (2017, 5300), (2018, 6100), (2019, 7000),
+        (2020, 7700), (2021, 8500), (2022, 9400), (2023, 10300), (2024, 11200),
+    ]),
+    *(_row("jp nagar", y, p) for y, p in [
+        (2015, 4500), (2016, 5100), (2017, 5800), (2018, 6600), (2019, 7500),
+        (2020, 8200), (2021, 9100), (2022, 10000), (2023, 10900), (2024, 11800),
+    ]),
+    *(_row("jayanagar", y, p) for y, p in [
+        (2015, 7000), (2016, 7900), (2017, 8900), (2018, 10000), (2019, 11200),
+        (2020, 12200), (2021, 13300), (2022, 14500), (2023, 15700), (2024, 16900),
+    ]),
+]
+
+
+def list_localities() -> list[str]:
+    """Return the distinct localities covered by the starter history."""
+    seen: list[str] = []
+    for r in LOCALITY_HISTORY:
+        if r["locality"] not in seen:
+            seen.append(r["locality"])
+    return seen
+
+
+# City-wide default parameters applied when a locality has no history and to
+# scale the sensitivities (calibrated against the aggregate CAGR spread).
+CITY_WIDE_DEFAULTS = {
+    "baseline_annual_growth": 0.07,   # ~7%/yr city-wide land appreciation
+    "demand_sensitivity": 0.35,
+    "scarcity_sensitivity": 0.15,
+    "infrastructure_sensitivity": 0.40,
+    "risk_sensitivity": 0.50,
+    "locality_scarcity": 0.30,        # generic scarcity index [0,1]
+}
