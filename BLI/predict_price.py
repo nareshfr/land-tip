@@ -10,6 +10,7 @@ import json
 import argparse
 import numpy as np
 import pandas as pd
+from difflib import get_close_matches
 from sklearn.model_selection import KFold
 from sklearn.metrics import r2_score, mean_squared_error, mean_absolute_error, median_absolute_error
 from catboost import CatBoostRegressor
@@ -141,6 +142,41 @@ class PricePredictorPipeline:
         
         return self._engineer_features(df)
 
+    def _fuzzy_match_location(self, location: str) -> str:
+        """Inference-time fuzzy matching: try to match an unrecognized location
+        to a known valid location before falling back to 'Other'.
+
+        Strategy (in order):
+        1. Exact match — already resolved by caller.
+        2. Space-insensitive, case-insensitive comparison (handles
+           "Indiranagar" vs "Indira Nagar", "Shivajinagar" vs "Shivaji Nagar").
+        3. difflib.get_close_matches with cutoff 0.85 (handles typos like
+           "Basavanagudi" vs "Basavangudi").
+        4. Fall through to original (becomes "Other" in _engineer_features).
+        """
+        if not self.valid_locations:
+            return location
+
+        # Build a normalized lookup once (cached on first call)
+        if not hasattr(self, "_norm_loc_cache"):
+            self._norm_loc_cache = {
+                re.sub(r"\s+", "", vl.lower()): vl for vl in self.valid_locations
+            }
+
+        # Strategy 2: space-insensitive match
+        norm = re.sub(r"\s+", "", location.lower())
+        if norm in self._norm_loc_cache:
+            return self._norm_loc_cache[norm]
+
+        # Strategy 3: difflib fuzzy match
+        matches = get_close_matches(
+            location, list(self.valid_locations), n=1, cutoff=0.85
+        )
+        if matches:
+            return matches[0]
+
+        return location
+
     def transform_features(self, df_raw: pd.DataFrame) -> pd.DataFrame:
         df = df_raw.copy()
         if "total_sqft_clean" not in df.columns:
@@ -153,6 +189,10 @@ class PricePredictorPipeline:
         df["bhk"] = df["bhk"].fillna(df["bath"])
         df["location_clean"] = df["location"].apply(lambda x: clean_text(x, uppercase=False))
         df["society_clean"] = df["society"].apply(lambda x: clean_text(x, uppercase=True)) if "society" in df.columns else "UNKNOWN"
+
+        # Fuzzy location matching: try to resolve unrecognized locations to
+        # valid ones before _engineer_features maps them to "Other".
+        df["location_clean"] = df["location_clean"].apply(self._fuzzy_match_location)
         
         return self._engineer_features(df)
 

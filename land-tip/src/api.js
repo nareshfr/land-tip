@@ -1,7 +1,31 @@
 // UrbanAlpha BLI backend API client
 // Backend runs via: uvicorn app.main:app --reload (port 8000)
 
+import { createLogger } from './logger.js';
+const log = createLogger('API');
+
 export const API_BASE_URL = 'http://localhost:8000';
+
+// Timing wrapper
+async function timedFetch(label, url, opts) {
+  const t0 = performance.now();
+  log.info(`${label} → ${opts?.method || 'GET'} ${url}`, opts?.body ? JSON.parse(opts.body) : undefined);
+  try {
+    const res = await fetch(url, opts);
+    const ms = Math.round(performance.now() - t0);
+    log.info(`${label} ← ${res.status} ${res.statusText} (${ms}ms)`);
+    if (!res.ok) {
+      let body = null;
+      try { body = await res.text(); } catch {}
+      log.error(`${label} HTTP ${res.status} response body`, body ? body.slice(0, 500) : '(empty)');
+    }
+    return res;
+  } catch (err) {
+    const ms = Math.round(performance.now() - t0);
+    log.error(`${label} network failure after ${ms}ms`, { name: err.name, message: err.message });
+    throw err;
+  }
+}
 
 /**
  * POST /parcel/analyze — baseline CatBoost valuation + spatial buffer analysis.
@@ -9,13 +33,15 @@ export const API_BASE_URL = 'http://localhost:8000';
  * @returns {Promise<object>} ParcelAnalysisResponse
  */
 export async function analyzeParcel(params) {
-  const res = await fetch(`${API_BASE_URL}/parcel/analyze`, {
+  const res = await timedFetch('analyzeParcel', `${API_BASE_URL}/parcel/analyze`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(params)
   });
   if (!res.ok) throw new Error(`Parcel analysis failed: ${res.status}`);
-  return res.json();
+  const json = await res.json();
+  log.debug('analyzeParcel response', json);
+  return json;
 }
 
 /**
@@ -26,13 +52,22 @@ export async function analyzeParcel(params) {
  * @returns {Promise<object>} SimulationRunResponse
  */
 export async function runSimulation(parcel, config = {}, scrapeFirst = false) {
-  const res = await fetch(`${API_BASE_URL}/simulation/run`, {
+  const payload = { parcel, config, scrape_first: scrapeFirst };
+  const res = await timedFetch('runSimulation', `${API_BASE_URL}/simulation/run`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ parcel, config, scrape_first: scrapeFirst })
+    body: JSON.stringify(payload)
   });
   if (!res.ok) throw new Error(`Simulation failed: ${res.status}`);
-  return res.json();
+  const json = await res.json();
+  log.debug('runSimulation response keys', {
+    has_baseline: !!json.baseline,
+    timeline_len: json.timeline?.length,
+    has_future_valuation: !!json.future_valuation,
+    has_summary: !!json.summary,
+    run_id: json.run_id
+  });
+  return json;
 }
 
 /**
@@ -41,7 +76,7 @@ export async function runSimulation(parcel, config = {}, scrapeFirst = false) {
  * @returns {Promise<object>} SimulationFetchResponse
  */
 export async function getSimulation(runId) {
-  const res = await fetch(`${API_BASE_URL}/simulation/${runId}`);
+  const res = await timedFetch('getSimulation', `${API_BASE_URL}/simulation/${runId}`);
   if (!res.ok) throw new Error(`Fetch simulation failed: ${res.status}`);
   return res.json();
 }
@@ -51,9 +86,11 @@ export async function getSimulation(runId) {
  * @returns {Promise<{count: number, projects: object[]}>}
  */
 export async function listInfrastructure() {
-  const res = await fetch(`${API_BASE_URL}/infrastructure/`);
+  const res = await timedFetch('listInfrastructure', `${API_BASE_URL}/infrastructure/`);
   if (!res.ok) throw new Error(`List infrastructure failed: ${res.status}`);
-  return res.json();
+  const json = await res.json();
+  log.debug('listInfrastructure response', { count: json.count, projects_len: json.projects?.length });
+  return json;
 }
 
 /**
@@ -65,7 +102,7 @@ export async function scrapeLive(sources = null) {
   const url = sources && sources.length
     ? `${API_BASE_URL}/infrastructure/scrape-live?${sources.map(s => `sources=${encodeURIComponent(s)}`).join('&')}`
     : `${API_BASE_URL}/infrastructure/scrape-live`;
-  const res = await fetch(url, { method: 'POST' });
+  const res = await timedFetch('scrapeLive', url, { method: 'POST' });
   if (!res.ok) throw new Error(`Scrape failed: ${res.status}`);
   return res.json();
 }
@@ -76,10 +113,16 @@ export async function scrapeLive(sources = null) {
  */
 export async function checkHealth() {
   try {
-    const res = await fetch(`${API_BASE_URL}/health`);
-    if (!res.ok) return { status: 'error', baseline_model_ready: false };
-    return res.json();
+    const res = await timedFetch('checkHealth', `${API_BASE_URL}/health`);
+    if (!res.ok) {
+      log.warn('checkHealth non-OK status, treating as offline', { status: res.status });
+      return { status: 'error', baseline_model_ready: false };
+    }
+    const json = await res.json();
+    log.info('checkHealth OK', json);
+    return json;
   } catch {
+    log.error('checkHealth — backend unreachable (is uvicorn running?)');
     return { status: 'error', baseline_model_ready: false };
   }
 }

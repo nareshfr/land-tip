@@ -1,5 +1,34 @@
 import { ZONE_CENTERS, EXACT_COORDS, BENGALURU_DATABASE } from './data/bengaluruLocations.js';
 import { analyzeParcel, runSimulation, listInfrastructure, checkHealth } from './api.js';
+import { createLogger } from './logger.js';
+
+const log = createLogger('APP');
+
+// --- Nearest-location lookup (haversine) ---
+function haversineKm(lat1, lng1, lat2, lng2) {
+  const R = 6371;
+  const dLat = (lat2 - lat1) * Math.PI / 180;
+  const dLng = (lng2 - lng1) * Math.PI / 180;
+  const a = Math.sin(dLat / 2) ** 2 +
+    Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) *
+    Math.sin(dLng / 2) ** 2;
+  return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+}
+
+function findNearestLocation(lat, lng) {
+  let nearest = null;
+  let minDist = Infinity;
+  for (const loc of ALL_LOCATIONS) {
+    const [locLat, locLng] = loc.coords;
+    const dist = haversineKm(lat, lng, locLat, locLng);
+    if (dist < minDist) {
+      minDist = dist;
+      nearest = loc;
+    }
+  }
+  if (nearest) log.debug('findNearestLocation', { lat, lng, nearest: nearest.name, dist_km: minDist.toFixed(2) });
+  return nearest;
+}
 
 const BASE_YEAR = 2026;
 const OFFSETS = [0, 1, 2, 3, 4, 5];
@@ -127,6 +156,7 @@ function getProjectedPrice(offset) {
   const target = getTarget();
   if (state.backendData?.timeline?.length > offset) {
     const entry = state.backendData.timeline[offset];
+    log.trace(`getProjectedPrice offset=${offset} → BACKEND timeline`, { land_value_per_sqft: entry.land_value_per_sqft, active_infrastructure: entry.active_infrastructure });
     const price = Math.round(entry.land_value_per_sqft);
     const basePrice = state.backendData.baseline?.price_per_sqft_inr
       ? Math.round(state.backendData.baseline.price_per_sqft_inr)
@@ -135,6 +165,7 @@ function getProjectedPrice(offset) {
     const pct = basePrice > 0 ? ((diff / basePrice) * 100).toFixed(1) : '0.0';
     return { price, diff, pct };
   }
+  log.trace(`getProjectedPrice offset=${offset} → FALLBACK calcProjected (backendData=${state.backendData ? 'present' : 'null'}, timeline_len=${state.backendData?.timeline?.length ?? 0})`);
   return calcProjected(target.basePrice, target.cagr, offset);
 }
 
@@ -152,6 +183,7 @@ function polygonToGeoJSON(points) {
 }
 
 async function fetchBackendData(locationName, geojson = null) {
+  log.info('fetchBackendData START', { location: locationName, has_geojson: !!geojson });
   state.backendLoading = true;
   updateBackendStatus();
 
@@ -166,12 +198,32 @@ async function fetchBackendData(locationName, geojson = null) {
     society: 'Unknown'
   };
   if (geojson) parcelParams.geojson = geojson;
+  log.debug('fetchBackendData parcel params', parcelParams);
 
   try {
+    const t0 = performance.now();
     const [analysis, sim] = await Promise.all([
       analyzeParcel(parcelParams),
       runSimulation(parcelParams, { years: 5, households: 50, developers: 5, seed: 42, initial_interest_rate: 8.5, capital_availability: 1.0 }, false)
     ]);
+    const ms = Math.round(performance.now() - t0);
+    log.info('fetchBackendData both API calls resolved', { ms });
+
+    log.debug('fetchBackendData analysis response', {
+      has_price: analysis?.price_per_sqft_inr !== undefined,
+      has_buffers: !!analysis?.buffers?.length,
+      buffer_count: analysis?.buffers?.length ?? 0
+    });
+    log.debug('fetchBackendData simulation response', {
+      has_baseline: !!sim?.baseline,
+      baseline_keys: sim?.baseline ? Object.keys(sim.baseline) : [],
+      timeline_len: sim?.timeline?.length ?? 0,
+      has_future_valuation: !!sim?.future_valuation,
+      future_valuation_keys: sim?.future_valuation ? Object.keys(sim.future_valuation) : [],
+      has_summary: !!sim?.summary,
+      run_id: sim?.run_id
+    });
+
     state.backendData = {
       location: locationName,
       analysis,
@@ -182,7 +234,13 @@ async function fetchBackendData(locationName, geojson = null) {
       run_id: sim.run_id
     };
     state.backendConnected = true;
+    log.info('fetchBackendData SUCCESS — backendData stored', {
+      timeline_len: sim.timeline?.length,
+      has_future_valuation: !!sim.future_valuation,
+      has_baseline_price: sim.baseline?.price_per_sqft_inr !== undefined
+    });
   } catch (err) {
+    log.error('fetchBackendData FAILED — falling back to static values', { message: err.message, name: err.name });
     state.backendData = null;
     state.backendConnected = false;
   } finally {
@@ -209,16 +267,29 @@ function updateBackendStatus() {
 }
 
 async function initBackend() {
+  log.info('initBackend START');
   const health = await checkHealth();
-  if (health.status !== 'ok') return;
+  log.debug('initBackend health result', health);
+  if (health.status !== 'ok') {
+    log.warn('initBackend — backend not healthy, aborting. Static fallbacks will be used everywhere.', health);
+    return;
+  }
+  if (!health.baseline_model_ready) {
+    log.warn('initBackend — health OK but baseline_model_ready=false. CatBoost model may not be loaded.');
+  }
   state.backendConnected = true;
   updateBackendStatus();
   try {
     const infraRes = await listInfrastructure();
     state.backendInfra = infraRes.projects || [];
-  } catch { /* keep empty */ }
+    log.info('initBackend infrastructure loaded', { count: state.backendInfra.length });
+  } catch (err) {
+    log.warn('initBackend infrastructure fetch failed — map will use FUTURE_CATALYSTS fallback', { message: err.message });
+  }
+  log.info('initBackend fetching initial parcel data for', state.activeArea.name);
   await fetchBackendData(state.activeArea.name);
   renderMapOverlays();
+  log.info('initBackend DONE');
 }
 
 const counterCache = {};
@@ -257,8 +328,10 @@ function buildMaskTooltip(target, offset) {
 
 // Live Overpass API Landmark Fetcher
 async function fetchLiveLandmarks(lat, lng) {
+  log.info('fetchLiveLandmarks START', { lat, lng });
   const badge = document.getElementById('sync-badge');
   badge.classList.remove('hidden');
+  const t0 = performance.now();
   try {
     const query = `[out:json][timeout:10];(
       node["railway"="station"](around:2500,${lat},${lng});
@@ -267,11 +340,18 @@ async function fetchLiveLandmarks(lat, lng) {
       node["office"](around:1800,${lat},${lng});
       node["amenity"~"hospital|university|mall"](around:1800,${lat},${lng});
     );out center 18;`;
+    log.debug('fetchLiveLandmarks Overpass query sent');
     const res = await fetch('https://overpass-api.de/api/interpreter', {
       method: 'POST',
       body: 'data=' + encodeURIComponent(query)
     });
+    if (!res.ok) {
+      log.warn('fetchLiveLandmarks Overpass non-OK', { status: res.status });
+      throw new Error(`Overpass ${res.status}`);
+    }
     const data = await res.json();
+    const rawCount = data.elements?.length ?? 0;
+    log.debug('fetchLiveLandmarks Overpass raw elements', { count: rawCount });
     const items = (data.elements || [])
       .filter((el) => el.tags && el.tags.name)
       .slice(0, 16)
@@ -283,7 +363,10 @@ async function fetchLiveLandmarks(lat, lng) {
         return { name: el.tags.name, kind, coords: c };
       });
     state.liveLandmarks = items;
+    const ms = Math.round(performance.now() - t0);
+    log.info('fetchLiveLandmarks SUCCESS', { count: items.length, ms });
   } catch (err) {
+    log.error('fetchLiveLandmarks FAILED', { message: err.message });
     state.liveLandmarks = [];
   } finally {
     badge.classList.add('hidden');
@@ -337,6 +420,7 @@ function renderMapOverlays() {
   if (state.layers.infra && state.offset > 0) {
     // Use backend infrastructure when available; fall back to hardcoded catalysts
     if (state.backendInfra.length) {
+      log.trace('renderMapOverlays infra → BACKEND projects', { count: state.backendInfra.length });
       const statusColors = {
         OPERATIONAL: '#059669',
         UNDER_CONSTRUCTION: '#f97316',
@@ -371,6 +455,7 @@ function renderMapOverlays() {
         L.marker(coords, { icon: L.divIcon({ html: calloutHtml, iconSize: [200, 64], iconAnchor: [100, 72] }) }).addTo(infraLayer);
       });
     } else {
+      log.trace('renderMapOverlays infra → FALLBACK FUTURE_CATALYSTS (backendInfra empty)');
       FUTURE_CATALYSTS.forEach((proj) => {
         if (state.offset < proj.yearOffset) return;
         L.circle(proj.coords, {
@@ -436,17 +521,23 @@ function renderUI() {
 
   // Use backend confidence when available, fall back to static R²
   const confidence = state.backendData?.baseline?.confidence;
-  document.getElementById('an-r2').textContent = confidence
-    ? `Confidence ${Math.round(confidence * 100)}%`
-    : 'R² = 0.81';
+  if (confidence) {
+    log.trace('renderUI an-r2 → BACKEND confidence', { confidence });
+    document.getElementById('an-r2').textContent = `Confidence ${Math.round(confidence * 100)}%`;
+  } else {
+    log.trace('renderUI an-r2 → FALLBACK static R² = 0.81 (no backendData.baseline.confidence)');
+    document.getElementById('an-r2').textContent = 'R² = 0.81';
+  }
 
   // CAGR from backend timeline when available
   if (state.backendData?.timeline?.length > 1) {
     const firstPrice = state.backendData.timeline[0]?.land_value_per_sqft || price;
     const lastPrice = state.backendData.timeline[state.backendData.timeline.length - 1]?.land_value_per_sqft || price;
     const cagr = firstPrice > 0 ? (Math.pow(lastPrice / firstPrice, 1 / (OFFSETS.length - 1)) - 1) * 100 : 0;
+    log.trace('renderUI an-cagr → BACKEND timeline CAGR', { firstPrice, lastPrice, cagr: cagr.toFixed(2) });
     document.getElementById('an-cagr-badge').textContent = `CAGR ${cagr.toFixed(1)}%`;
   } else {
+    log.trace('renderUI an-cagr → FALLBACK static cagr from bengaluruLocations.js', { cagr: target.cagr });
     document.getElementById('an-cagr-badge').textContent = `CAGR ${(target.cagr * 100).toFixed(1)}%`;
   }
 
@@ -459,6 +550,7 @@ function renderUI() {
   let drivers;
   if (state.backendData?.future_valuation?.drivers) {
     const d = state.backendData.future_valuation.drivers;
+    log.trace('renderUI drivers → BACKEND future_valuation.drivers', d);
     const total = Math.abs(d.demand_pressure || 0) + Math.abs(d.infrastructure || 0) + Math.abs(d.macro_risk || 0) || 1;
     drivers = [
       { label: 'Demand Pressure', pct: Math.round(Math.abs(d.demand_pressure || 0) / total * 100) },
@@ -467,6 +559,7 @@ function renderUI() {
       { label: 'Active Infra Nearby', pct: Math.min(100, (state.backendData.timeline?.[state.offset]?.active_infrastructure || 0) * 15) }
     ];
   } else {
+    log.trace('renderUI drivers → FALLBACK static [38, 27, 22, 13] (no backendData.future_valuation.drivers)');
     drivers = [
       { label: 'Metro Station Proximity', pct: 38 },
       { label: 'Built-Up & Satellite Expansion', pct: 27 },
@@ -494,6 +587,7 @@ function renderUI() {
   // Spatial buffer impact from backend parcel analysis
   const bufferSection = document.getElementById('buffer-impact-section');
   if (state.backendData?.analysis?.buffers?.length) {
+    log.trace('renderUI buffer-impact → BACKEND analysis.buffers', { count: state.backendData.analysis.buffers.length });
     bufferSection.classList.remove('hidden');
     bufferSection.innerHTML = state.backendData.analysis.buffers.map((b) => {
       const label = b.radius_m >= 1000 ? `${b.radius_m / 1000}km` : `${b.radius_m}m`;
@@ -505,6 +599,7 @@ function renderUI() {
         </div>`;
     }).join('');
   } else {
+    log.trace('renderUI buffer-impact → HIDDEN (no backendData.analysis.buffers)');
     bufferSection.classList.add('hidden');
   }
 
@@ -513,6 +608,7 @@ function renderUI() {
 
 // Select Location (with live Nominatim resolution if exact coords aren't cached)
 async function selectLocationItem(item) {
+  log.info('selectLocationItem', { name: item.name, category: item.category, hasExactCoords: item.hasExactCoords });
   state.maskedArea = null;
   document.getElementById('search-input').value = item.name;
   document.getElementById('search-dropdown').classList.add('hidden');
@@ -521,13 +617,19 @@ async function selectLocationItem(item) {
 
   let targetCoords = item.coords;
   if (!item.hasExactCoords) {
+    log.debug('selectLocationItem no exact coords — querying Nominatim');
     try {
       const res = await fetch(`https://nominatim.openstreetmap.org/search?format=json&limit=1&q=${encodeURIComponent(item.name + ', Bengaluru, Karnataka, India')}`);
       const data = await res.json();
       if (data && data.length > 0) {
         targetCoords = [parseFloat(data[0].lat), parseFloat(data[0].lon)];
+        log.debug('selectLocationItem Nominatim resolved', targetCoords);
+      } else {
+        log.warn('selectLocationItem Nominatim returned 0 results — using zone center fallback', item.coords);
       }
-    } catch (e) { /* keep zone center fallback */ }
+    } catch (e) {
+      log.error('selectLocationItem Nominatim failed — using zone center fallback', { message: e.message });
+    }
   }
 
   state.activeArea = { ...item, coords: targetCoords };
@@ -721,9 +823,16 @@ function finishDraw() {
 
   const poly = L.polygon(state.drawPoints, { color: '#0f172a', weight: 2, fillColor: '#f97316', fillOpacity: 0.34 }).addTo(maskLayer);
   const center = poly.getBounds().getCenter();
+
+  // Find nearest known location from the mask centroid — this is what the
+  // backend CatBoost model needs (it uses location NAME, not coordinates).
+  const nearest = findNearestLocation(center.lat, center.lng);
+  const nearestName = nearest ? nearest.name : state.activeArea.name;
+  log.info('finishDraw mask drawn', { center: [center.lat, center.lng], nearest: nearestName });
+
   state.maskedArea = {
     ...state.activeArea,
-    name: `Masked Zone (${state.activeArea.name})`,
+    name: `Masked Zone (${nearestName})`,
     coords: [center.lat, center.lng],
     polygonLayer: poly
   };
@@ -732,7 +841,7 @@ function finishDraw() {
   renderUI();
   fetchLiveLandmarks(center.lat, center.lng);
   const geojson = polygonToGeoJSON(state.drawPoints);
-  fetchBackendData(state.activeArea.name, geojson);
+  fetchBackendData(nearestName, geojson);
 }
 
 drawBtn.addEventListener('click', startDraw);
@@ -746,7 +855,15 @@ clearBtn.addEventListener('click', () => {
 });
 
 map.on('click', (e) => {
-  if (!state.drawing) return;
+  if (!state.drawing) {
+    // Non-drawing mode: click selects nearest known location.
+    const nearest = findNearestLocation(e.latlng.lat, e.latlng.lng);
+    if (nearest) {
+      log.info('Map click → selecting nearest location', { clicked: [e.latlng.lat, e.latlng.lng], nearest: nearest.name });
+      selectLocationItem(nearest);
+    }
+    return;
+  }
   state.drawPoints.push([e.latlng.lat, e.latlng.lng]);
   drawPreviewLayer.clearLayers();
   L.polyline(state.drawPoints, { color: '#0f172a', weight: 2, dashArray: '5, 5' }).addTo(drawPreviewLayer);
