@@ -1,0 +1,27 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "urbanalpha"
+version = "0.1.0"
+description = "GeoAI-Powered Urban Simulation and Land Valuation platform for Bengaluru"
+readme = "README.md"
+requires-python = ">=3.10"
+dynamic = ["dependencies"]
+
+[tool.setuptools]
+packages = ["app", "app.api", "app.agents", "app.baseline", "app.db",
+            "app.scraping", "app.services", "app.simulation", "app.spatial"]
+
+[tool.setuptools.dynamic]
+dependencies = { file = ["requirements.txt"] }
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
+filterwarnings = [
+    "ignore::DeprecationWarning:starlette.*",
+]

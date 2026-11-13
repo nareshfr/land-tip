@@ -1,0 +1,299 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>UrbanAlpha · Bengaluru GeoAI Intelligence</title>
+  <script src="https://cdn.tailwindcss.com/3.4.17"></script>
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+  <link rel="stylesheet" href="./src/styles/main.css" />
+</head>
+<body class="relative w-screen h-screen overflow-hidden select-none">
+
+  <!-- FULL-SCREEN LEAFLET MAP -->
+  <div id="map" class="w-full h-full z-10"></div>
+
+  <!-- SLIM LEFT GLASS ICON RAIL -->
+  <nav class="glass-panel fixed left-4 top-1/2 -translate-y-1/2 z-30 rounded-full p-2 flex flex-col items-center gap-2.5">
+    <div class="w-9 h-9 rounded-full bg-slate-950 text-white flex items-center justify-center font-bold text-xs tracking-tighter">
+      UA
+    </div>
+    <div class="w-5 h-px bg-slate-300/70"></div>
+
+    <button type="button" id="nav-map-btn" title="Full-Screen Map" class="w-9 h-9 rounded-full bg-slate-950 text-white flex items-center justify-center transition-all">
+      <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="1.8" viewBox="0 0 24 24">
+        <polygon points="3 6 9 3 15 6 21 3 21 18 15 21 9 18 3 21"></polygon>
+        <line x1="9" y1="3" x2="9" y2="18"></line>
+        <line x1="15" y1="6" x2="15" y2="21"></line>
+      </svg>
+    </button>
+
+    <button type="button" id="nav-draw-btn" title="Draw Custom Area Mask (+)" class="w-9 h-9 rounded-full text-slate-700 hover:bg-white/80 flex items-center justify-center transition-all">
+      <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="1.8" viewBox="0 0 24 24">
+        <line x1="12" y1="5" x2="12" y2="19"></line>
+        <line x1="5" y1="12" x2="19" y2="12"></line>
+      </svg>
+    </button>
+
+    <button type="button" id="nav-analysis-btn" title="Separate Analysis View" class="w-9 h-9 rounded-full text-slate-700 hover:bg-white/80 flex items-center justify-center transition-all">
+      <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="1.8" viewBox="0 0 24 24">
+        <line x1="18" y1="20" x2="18" y2="10"></line>
+        <line x1="12" y1="20" x2="12" y2="4"></line>
+        <line x1="6" y1="20" x2="6" y2="14"></line>
+      </svg>
+    </button>
+
+    <button type="button" id="nav-layers-btn" title="Layers &amp; Directory" class="w-9 h-9 rounded-full text-slate-700 hover:bg-white/80 flex items-center justify-center transition-all">
+      <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="1.8" viewBox="0 0 24 24">
+        <polygon points="12 2 2 7 12 12 22 7 12 2"></polygon>
+        <polyline points="2 17 12 22 22 17"></polyline>
+        <polyline points="2 12 12 17 22 12"></polyline>
+      </svg>
+    </button>
+  </nav>
+
+  <!-- FLOATING TOP SEARCH & FILTER BAR -->
+  <header class="fixed top-4 left-20 right-4 z-40 flex flex-wrap items-center justify-between gap-2 pointer-events-none">
+    <!-- Search Bar covering all 250+ Areas & Landmarks + Live Nominatim -->
+    <div class="relative w-full sm:w-96 pointer-events-auto">
+      <div class="glass-panel rounded-full px-3.5 py-2 flex items-center gap-2">
+        <svg class="w-3.5 h-3.5 text-slate-500 shrink-0" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+          <circle cx="11" cy="11" r="8"></circle>
+          <line x1="21" y1="21" x2="16.65" y2="16.65"></line>
+        </svg>
+        <input
+          id="search-input"
+          type="text"
+          placeholder="Search 250+ Bengaluru areas, tech parks, metro..."
+          class="w-full bg-transparent text-xs font-medium text-slate-900 placeholder-slate-500 focus:outline-none"
+          autocomplete="off"
+        />
+        <span id="sync-badge" class="hidden text-[10px] font-semibold px-2 py-0.5 rounded-full bg-orange-500 text-white animate-pulse">
+          Sync
+        </span>
+        <button type="button" id="search-btn" class="px-2.5 py-1 rounded-full bg-slate-950 text-white text-[11px] font-medium hover:bg-slate-800 transition-all">
+          Find
+        </button>
+      </div>
+      <div id="search-dropdown" class="hidden glass-panel absolute left-0 right-0 mt-1.5 rounded-2xl overflow-hidden z-50 max-h-72 overflow-y-auto custom-scrollbar spring-in"></div>
+    </div>
+
+    <!-- Filter Pills + Draw Mask -->
+    <div class="flex flex-wrap items-center gap-2 pointer-events-auto">
+      <select id="filter-category" aria-label="Filter Category" class="glass-panel rounded-full px-3.5 py-2 text-xs font-medium text-slate-800 focus:outline-none cursor-pointer">
+        <option value="all">Directory · All 10 Categories</option>
+        <option value="Areas">Major Areas &amp; Localities</option>
+        <option value="Tech Parks">Tech Parks &amp; Business Hubs</option>
+        <option value="Transport">Transport &amp; Metro Hubs</option>
+        <option value="Malls">Malls &amp; Commercial</option>
+        <option value="Parks & Lakes">Parks, Lakes &amp; Nature</option>
+        <option value="Historical">Historical &amp; Architectural</option>
+        <option value="Education">Education &amp; Institutions</option>
+        <option value="Markets">Markets &amp; Food Streets</option>
+        <option value="Stadiums">Stadiums &amp; Entertainment</option>
+        <option value="Roads">Major Roads &amp; Corridors</option>
+      </select>
+
+      <select id="filter-landmarks" aria-label="Landmarks" class="glass-panel rounded-full px-3.5 py-2 text-xs font-medium text-slate-800 focus:outline-none cursor-pointer">
+        <option value="all">Map Pins · All Landmarks</option>
+        <option value="metro">Metro Stations</option>
+        <option value="tech">Tech Parks &amp; Offices</option>
+        <option value="amenity">Malls, Lakes &amp; Civic</option>
+      </select>
+
+      <button type="button" id="draw-mask-btn" class="glass-panel rounded-full px-3.5 py-2 text-xs font-semibold text-slate-900 hover:bg-white transition-all flex items-center gap-1.5">
+        <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+          <polygon points="12 2 19 21 12 17 5 21 12 2"></polygon>
+        </svg>
+        <span>Draw Mask</span>
+      </button>
+
+      <button type="button" id="finish-mask-btn" class="hidden rounded-full px-3.5 py-2 text-xs font-semibold bg-orange-500 text-white shadow-md hover:bg-orange-600 transition-all">
+        Finish Mask
+      </button>
+
+      <button type="button" id="clear-mask-btn" class="hidden glass-panel rounded-full px-3 py-2 text-xs font-medium text-slate-700 hover:bg-white transition-all">
+        Clear
+      </button>
+    </div>
+  </header>
+
+  <!-- DRAWING HINT PILL -->
+  <div id="draw-banner" class="hidden fixed top-16 left-1/2 -translate-x-1/2 z-30 glass-smoked text-white text-xs px-4 py-2 rounded-full spring-in">
+    Click 3+ points on the map to outline your area, then click <strong>Finish Mask</strong>.
+  </div>
+
+  <!-- FLOATING TRIPLE-PILL SMOKED-GLASS CALLOUT -->
+  <div id="triple-pill" class="fixed bottom-24 left-4 sm:left-20 z-20 flex-wrap items-center gap-1.5 spring-in">
+    <div class="glass-smoked text-white px-4 py-2.5 rounded-2xl text-center min-w-[76px]">
+      <div id="pill-builtup" class="text-lg font-bold tabular-nums">86%</div>
+      <div class="text-[10px] text-slate-300 uppercase tracking-wider">Built-Up</div>
+    </div>
+
+    <div class="glass-smoked text-white px-5 py-2.5 rounded-2xl text-center min-w-[154px]">
+      <div id="pill-price" class="text-lg font-bold tabular-nums text-orange-400">₹21,400</div>
+      <div id="pill-area-label" class="text-[10px] text-slate-300 truncate max-w-[144px]">Indiranagar · ₹/sq ft</div>
+    </div>
+
+    <div class="glass-smoked text-white px-4 py-2.5 rounded-2xl text-center min-w-[92px]">
+      <div id="pill-horizon" class="text-lg font-bold tabular-nums">Now</div>
+      <div id="pill-delta" class="text-[10px] text-emerald-400 font-semibold tabular-nums">+₹0 (0.0%)</div>
+    </div>
+
+    <button type="button" id="pill-info-btn" title="Open Separate Statistical Analysis View (i)" class="glass-smoked w-10 h-10 rounded-2xl text-white font-bold text-xs flex items-center justify-center hover:bg-orange-500 transition-all">
+      i
+    </button>
+  </div>
+
+  <!-- FLOATING BOTTOM GLASS DOCK (SLIDER + CATEGORIZED DROP-UP DIRECTORY + LAYERS) -->
+  <footer class="glass-panel fixed bottom-5 left-1/2 -translate-x-1/2 z-30 rounded-full px-4 py-2.5 flex flex-wrap items-center gap-2.5 max-w-[94vw]">
+    <button type="button" id="play-btn" class="px-3.5 py-1.5 rounded-full bg-slate-950 text-white text-xs font-semibold hover:bg-slate-800 transition-all flex items-center gap-1.5">
+      <span id="play-icon">&#9654;</span>
+      <span id="play-text">Play +5Y</span>
+    </button>
+
+    <div class="flex items-center gap-2 min-w-[170px] sm:min-w-[220px]">
+      <span class="text-[11px] font-semibold text-slate-600 tabular-nums">2026</span>
+      <input id="horizon-slider" type="range" min="0" max="5" step="1" value="0" aria-label="5-Year Forecast Slider" class="w-full h-1.5 cursor-pointer" />
+      <span class="text-[11px] font-semibold text-orange-600 tabular-nums">2031</span>
+    </div>
+
+    <div class="hidden md:flex items-center gap-1">
+      <button type="button" data-offset="0" class="offset-pill px-2.5 py-1 rounded-full text-[11px] font-semibold tabular-nums">Now</button>
+      <button type="button" data-offset="1" class="offset-pill px-2.5 py-1 rounded-full text-[11px] font-semibold tabular-nums">+1Y</button>
+      <button type="button" data-offset="2" class="offset-pill px-2.5 py-1 rounded-full text-[11px] font-semibold tabular-nums">+2Y</button>
+      <button type="button" data-offset="3" class="offset-pill px-2.5 py-1 rounded-full text-[11px] font-semibold tabular-nums">+3Y</button>
+      <button type="button" data-offset="4" class="offset-pill px-2.5 py-1 rounded-full text-[11px] font-semibold tabular-nums">+4Y</button>
+      <button type="button" data-offset="5" class="offset-pill px-2.5 py-1 rounded-full text-[11px] font-semibold tabular-nums">+5Y</button>
+    </div>
+
+    <!-- Drop-Up Directory (All 250+ Areas & Landmarks) -->
+    <div class="relative">
+      <button type="button" id="directory-dropup-btn" class="px-3 py-1.5 rounded-full bg-white/85 border border-slate-300/80 text-xs font-semibold text-slate-900 hover:bg-white transition-all flex items-center gap-1">
+        <span>Browse All</span>
+        <span class="text-[10px]">&#9650;</span>
+      </button>
+
+      <div id="directory-dropup-panel" class="hidden glass-panel absolute bottom-full right-0 mb-3 w-[320px] sm:w-[390px] rounded-3xl p-4 z-50 spring-in">
+        <div class="flex items-center justify-between border-b border-slate-200/70 pb-2 mb-2.5">
+          <span class="text-[11px] font-bold uppercase tracking-wider text-slate-700">Bengaluru Database (250+)</span>
+          <span id="dir-count-badge" class="text-[10px] font-semibold px-2 py-0.5 rounded-full bg-slate-950 text-white tabular-nums">0 items</span>
+        </div>
+        <!-- Category Chips -->
+        <div id="dir-tabs" class="flex flex-wrap gap-1 mb-2.5"></div>
+        <!-- Scrollable Items -->
+        <div id="dir-items" class="max-h-56 overflow-y-auto custom-scrollbar grid grid-cols-2 gap-1.5 pr-1"></div>
+      </div>
+    </div>
+
+    <!-- Drop-Up Layers Menu -->
+    <div class="relative">
+      <button type="button" id="dropup-btn" class="px-3 py-1.5 rounded-full bg-white/85 border border-slate-300/80 text-xs font-semibold text-slate-800 hover:bg-white transition-all flex items-center gap-1">
+        <span>Layers</span>
+        <span class="text-[10px]">&#9650;</span>
+      </button>
+
+      <div id="dropup-panel" class="hidden glass-panel absolute bottom-full right-0 mb-3 w-64 rounded-2xl p-3.5 z-50 space-y-2.5 text-xs spring-in">
+        <div class="text-[10px] font-bold uppercase tracking-wider text-slate-500 border-b border-slate-200/70 pb-1.5">
+          Map &amp; Data Layers
+        </div>
+        <label class="flex items-center justify-between cursor-pointer">
+          <span class="text-slate-800 font-medium">Namma Metro Lines</span>
+          <input type="checkbox" id="chk-metro" checked class="accent-slate-900" />
+        </label>
+        <label class="flex items-center justify-between cursor-pointer">
+          <span class="text-slate-800 font-medium">Live Landmarks (OSM)</span>
+          <input type="checkbox" id="chk-landmarks" checked class="accent-slate-900" />
+        </label>
+        <label class="flex items-center justify-between cursor-pointer">
+          <span class="text-slate-800 font-medium">Future Infra Callouts</span>
+          <input type="checkbox" id="chk-infra" checked class="accent-slate-900" />
+        </label>
+        <label class="flex items-center justify-between cursor-pointer">
+          <span class="text-slate-800 font-medium">Satellite Basemap</span>
+          <input type="checkbox" id="chk-satellite" class="accent-slate-900" />
+        </label>
+        <button type="button" id="reset-blr-btn" class="w-full py-1.5 rounded-xl bg-slate-950 text-white font-semibold text-[11px] hover:bg-slate-800 transition-all">
+          Reset Full Bengaluru
+        </button>
+      </div>
+    </div>
+  </footer>
+
+  <!-- SEPARATE FULL-SCREEN ANALYSIS VIEW -->
+  <section id="analysis-view" class="hidden fixed inset-0 z-40 glass-panel overflow-y-auto p-6 sm:p-10 morph-in">
+    <div class="max-w-5xl mx-auto space-y-6">
+      <div class="flex flex-wrap items-center justify-between gap-4 border-b border-slate-300/70 pb-5">
+        <div>
+          <div class="text-[11px] font-bold uppercase tracking-widest text-orange-600">
+            UrbanAlpha · Explainable GeoAI &amp; Statistical Causality
+          </div>
+          <h1 id="analysis-title" class="text-2xl sm:text-3xl font-bold text-slate-950 swiss-heading mt-1">
+            Indiranagar · 2026–2031 Valuation Analysis
+          </h1>
+          <p id="analysis-subtitle" class="text-xs text-slate-600 mt-0.5">Bengaluru GeoAI Catchment</p>
+        </div>
+
+        <button type="button" id="back-to-map-btn" class="px-4 py-2.5 rounded-full bg-slate-950 text-white text-xs font-semibold hover:bg-slate-800 transition-all shadow-sm">
+          &larr; Back to Full-Screen Map
+        </button>
+      </div>
+
+      <div class="grid grid-cols-2 sm:grid-cols-4 gap-4">
+        <div class="bg-white/80 border border-slate-200/80 rounded-2xl p-4">
+          <div class="text-[11px] text-slate-500 uppercase tracking-wider">Projected Rate</div>
+          <div id="an-price" class="text-2xl font-bold text-slate-950 tabular-nums mt-1">₹21,400 / sq ft</div>
+          <div id="an-diff" class="text-xs font-semibold text-emerald-600 tabular-nums mt-0.5">+₹0 (+0.0%)</div>
+        </div>
+        <div class="bg-white/80 border border-slate-200/80 rounded-2xl p-4">
+          <div class="text-[11px] text-slate-500 uppercase tracking-wider">Metro Elasticity</div>
+          <div id="an-elasticity" class="text-2xl font-bold text-slate-950 tabular-nums mt-1">+0.42 / km</div>
+          <div class="text-xs text-slate-500 mt-0.5">Nearest: <span id="an-metro-dist">0.4 km</span></div>
+        </div>
+        <div class="bg-white/80 border border-slate-200/80 rounded-2xl p-4">
+          <div class="text-[11px] text-slate-500 uppercase tracking-wider">Live OSM Landmarks</div>
+          <div id="an-landmarks-count" class="text-2xl font-bold text-slate-950 tabular-nums mt-1">0</div>
+          <div class="text-xs text-slate-500 mt-0.5">Built-Up: <span id="an-builtup">86%</span></div>
+        </div>
+        <div class="bg-white/80 border border-slate-200/80 rounded-2xl p-4">
+          <div class="text-[11px] text-slate-500 uppercase tracking-wider">Model Fit (R²)</div>
+          <div id="an-r2" class="text-2xl font-bold text-slate-950 tabular-nums mt-1">R² = 0.81</div>
+          <div id="an-samples" class="text-xs text-emerald-600 font-semibold mt-0.5">p &lt; 0.001</div>
+        </div>
+      </div>
+
+      <div class="grid grid-cols-1 lg:grid-cols-12 gap-6">
+        <div class="lg:col-span-7 bg-white/85 border border-slate-200/80 rounded-3xl p-5">
+          <div class="flex items-center justify-between mb-3">
+            <div>
+              <h2 class="text-sm font-bold text-slate-900 swiss-heading">5-Year Price Forecast Curve (2026–2031)</h2>
+              <p class="text-xs text-slate-500">Projected ₹/sq ft trajectory across infrastructure milestones</p>
+            </div>
+            <span id="an-cagr-badge" class="text-xs font-bold px-3 py-1 rounded-full bg-slate-950 text-white tabular-nums">CAGR 6.8%</span>
+          </div>
+          <div class="relative h-64">
+            <canvas id="analysisChart"></canvas>
+          </div>
+        </div>
+
+        <div class="lg:col-span-5 bg-white/85 border border-slate-200/80 rounded-3xl p-5 flex flex-col justify-between gap-4">
+          <div>
+            <h2 class="text-sm font-bold text-slate-900 swiss-heading">SHAP Feature Attribution</h2>
+            <p class="text-xs text-slate-500 mb-3">Factors driving the valuation shift</p>
+            <div id="an-drivers" class="space-y-3"></div>
+          </div>
+
+          <div class="border-t border-slate-200/70 pt-3">
+            <div class="text-xs font-bold text-slate-900 mb-2">Discovered Nearby Landmarks (Live)</div>
+            <div id="an-landmark-list" class="max-h-32 overflow-y-auto custom-scrollbar space-y-1.5 text-xs"></div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <script type="module" src="./src/app.js"></script>
+</body>
+</html>
