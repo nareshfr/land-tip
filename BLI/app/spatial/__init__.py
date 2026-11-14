@@ -14,7 +14,7 @@ from app.spatial.buffers import (
     parse_geometry,
     point_wkt,
 )
-from app.spatial.localities import locality_centroid
+from app.spatial.localities import find_nearest_anchor, haversine_distance_km, locality_centroid
 
 __all__ = [
     "LocalProjector",
@@ -23,4 +23,6 @@ __all__ = [
     "parse_geometry",
     "point_wkt",
     "locality_centroid",
+    "find_nearest_anchor",
+    "haversine_distance_km",
 ]

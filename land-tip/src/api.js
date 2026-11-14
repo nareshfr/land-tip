@@ -4,7 +4,9 @@
 import { createLogger } from './logger.js';
 const log = createLogger('API');
 
-export const API_BASE_URL = 'http://localhost:8000';
+export const API_BASE_URL = typeof window !== 'undefined' && window.location.hostname
+  ? `http://${window.location.hostname}:8000`
+  : 'http://localhost:8000';
 
 // Timing wrapper
 async function timedFetch(label, url, opts) {

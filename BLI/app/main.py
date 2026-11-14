@@ -17,8 +17,11 @@ from __future__ import annotations
 
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI
+from pathlib import Path
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse
+from fastapi.staticfiles import StaticFiles
 
 from app import __version__
 from app.api import ROUTERS
@@ -67,7 +70,12 @@ def health() -> dict:
 
 
 @app.get("/")
-def root() -> dict:
+def root(request: Request):
+    accept = request.headers.get("accept", "")
+    if "text/html" in accept and "application/json" not in accept:
+        index_path = _DIST_DIR / "index.html"
+        if index_path.exists():
+            return FileResponse(index_path)
     return {
         "service": "UrbanAlpha",
         "version": __version__,
@@ -80,6 +88,19 @@ def root() -> dict:
             "GET /health",
         ],
     }
+
+
+@app.get("/app", response_class=FileResponse)
+def serve_app():
+    index_path = _DIST_DIR / "index.html"
+    if index_path.exists():
+        return FileResponse(index_path)
+    return {"error": "Frontend build not found. Run 'npm run build' in land-tip."}
+
+
+_DIST_DIR = Path(__file__).resolve().parent.parent.parent / "land-tip" / "dist"
+if _DIST_DIR.exists() and (_DIST_DIR / "assets").exists():
+    app.mount("/assets", StaticFiles(directory=str(_DIST_DIR / "assets")), name="assets")
 
 
 for router in ROUTERS:

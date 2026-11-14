@@ -54,3 +54,15 @@ def test_compute_future_valuation_flat_timeline():
     )
     assert fv["future_price_lakhs"] == 168.0
     assert fv["appreciation_pct"] == 0.0
+
+
+def test_industrial_cluster_emergence():
+    base = baseline_valuation(location="Whitefield", total_sqft=2400)
+    centroid = locality_centroid("Whitefield")
+    cfg = SimulationConfig(years=5, households=20, developers=3, industrial_firms=6, seed=42)
+    out = run_simulation(base, _infra(), centroid, cfg, total_sqft=2400)
+    final_snap = out["timeline"][-1]
+    assert "active_factories" in final_snap
+    assert "industrial_jobs_created" in final_snap
+    assert "industrial_sqft_absorbed" in final_snap
+    assert "industrial_employment" in out["future_valuation"]["drivers"]

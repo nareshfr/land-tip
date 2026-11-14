@@ -13,6 +13,8 @@ from typing import Optional
 
 from shapely.geometry import Point, mapping, shape
 from shapely import wkt as _wkt
+import shapely
+import numpy as np
 
 from app.config import get_settings
 
@@ -114,24 +116,45 @@ def _project_geometry(proj: dict):
             except Exception:
                 return None
         return None
+    if hasattr(g, "geom_type"):
+        return g
     if isinstance(g, str):
         try:
             return _wkt.loads(g)
         except Exception:
             return None
-    return shape(g)
+    try:
+        return shape(g)
+    except Exception:
+        return None
 
 
 def _distance_geometry_m(point: Point, geom) -> float:
-    """Distance in metres from a lon/lat point to a lon/lat geometry."""
+    """True Euclidean distance in metres from a lon/lat point to a lon/lat geometry.
+
+    Transforms the geometry into local metre coordinates so that Point,
+    LineString transit/road corridors, and Polygon boundaries compute accurate
+    edge-to-edge distances in metres.
+    """
     proj = LocalProjector.bengaluru()
     px, py = proj.project(point.x, point.y)
-    # Reproject the geometry's representative point and use Euclidean distance
-    # in metres. For corridor-shaped geometries this is an acceptable proxy to a
-    # full edge-to-edge distance at urban scales.
-    rep = geom.representative_point()
-    gx, gy = proj.project(rep.x, rep.y)
-    return math.hypot(gx - px, gy - py)
+    p_m = Point(px, py)
+    try:
+        cos_lat = math.cos(math.radians(proj.lat0))
+
+        def _trans(coords):
+            xs = (coords[:, 0] - proj.lon0) * _M_PER_DEG_LAT * cos_lat
+            ys = (coords[:, 1] - proj.lat0) * _M_PER_DEG_LAT
+            if coords.shape[1] > 2:
+                return np.column_stack([xs, ys, coords[:, 2:]])
+            return np.column_stack([xs, ys])
+
+        geom_m = shapely.transform(geom, _trans)
+        return float(p_m.distance(geom_m))
+    except Exception:
+        rep = geom.centroid if hasattr(geom, "centroid") else geom.representative_point()
+        gx, gy = proj.project(rep.x, rep.y)
+        return float(math.hypot(gx - px, gy - py))
 
 
 def to_geojson(geom) -> Optional[dict]:

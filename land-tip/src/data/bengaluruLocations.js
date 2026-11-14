@@ -28,6 +28,7 @@ export const EXACT_COORDS = {
   "Koramangala": [12.9352, 77.6245],
   "HSR Layout": [12.9116, 77.6389],
   "Hebbal": [13.0358, 77.5970],
+  "Sahakara Nagar": [13.0624, 77.5898],
   "Jayanagar": [12.9308, 77.5838],
   "Yelahanka": [13.1007, 77.5963],
   "Yeshwanthpur": [13.0285, 77.5409],

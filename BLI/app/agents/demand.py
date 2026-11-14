@@ -61,6 +61,11 @@ class HouseholdAgent(mesa.Agent):
             ), status=ProjectStatus.OPERATIONAL)
             amenity = min(1.0, 0.1 + 0.10 * len(amenity_projects))
 
+        # Industrial employment accessibility boost from operational factories
+        ind_gravity = getattr(m, "industrial_employment_gravity", 0.0)
+        if ind_gravity > 0:
+            employment = min(1.8, employment + min(0.35, (ind_gravity / 500.0) * 0.15))
+
         # Housing cost: current land value per sqft normalised against baseline.
         current_ppsqft = m.land_value_per_sqft or self.baseline_ppsqft
         cost_ratio = current_ppsqft / max(1.0, self.baseline_ppsqft)

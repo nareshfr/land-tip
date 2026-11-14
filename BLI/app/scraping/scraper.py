@@ -163,14 +163,8 @@ def _flag_affected_parcels(repo, infra: list[dict]) -> dict[int, int]:
 
 
 def _proximity_m(centroid: Point, geom) -> float:
-    from app.spatial.buffers import LocalProjector
-    import math
-
-    proj = LocalProjector.bengaluru()
-    px, py = proj.project(centroid.x, centroid.y)
-    rep = geom.representative_point()
-    gx, gy = proj.project(rep.x, rep.y)
-    return math.hypot(gx - px, gy - py)
+    from app.spatial.buffers import _distance_geometry_m
+    return _distance_geometry_m(centroid, geom)
 
 
 def scrape_live(sources: Optional[list[str]] = None) -> dict:

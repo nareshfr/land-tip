@@ -137,7 +137,8 @@ class MarketDynamicsEngine:
 
         # Keep growth sane: bound the annual move so a single shock can't explode.
         g_total = g_market + g_demand + g_scarity - g_risk
-        g_total = _clamp(g_total, -0.25, 0.45)
+        min_growth = -0.25 if g_risk > 0.04 else max(0.02, cal.baseline_annual_growth * 0.25)
+        g_total = _clamp(g_total, min_growth, 0.45)
 
         return YearGrowth(
             g_market=g_market,

@@ -1,4 +1,11 @@
 {
+  "name": "land-tip",
+  "version": "1.0.0",
+  "scripts": {
+    "dev": "vite --port 5173",
+    "build": "vite build",
+    "preview": "vite preview"
+  },
   "dependencies": {
     "@tailwindcss/vite": "^4.3.5",
     "tailwindcss": "^4.3.5"

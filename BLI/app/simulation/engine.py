@@ -39,6 +39,7 @@ def build_model(
         use_infrastructure_agent=getattr(config, "use_infrastructure_agent", True),
         use_market_dynamics=getattr(config, "use_market_dynamics", True),
         use_impact_engine=getattr(config, "use_impact_engine", True),
+        industrial_firms=getattr(config, "industrial_firms", 5),
     )
     model.set_within_2km(within_ids)
     return model

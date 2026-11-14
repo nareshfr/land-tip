@@ -42,8 +42,19 @@ def run_simulation_request(req: SimulationRunRequest) -> SimulationRunResponse:
     if req.scrape_first:
         trigger_scrape()
 
+    centroid, geom_wkt = _parcel_centroid(parcel_req)
+    from app.spatial.localities import find_nearest_anchor
+
+    anchor_name, anchor_dist_km, _ = find_nearest_anchor(centroid.x, centroid.y)
+    if parcel_req.location and parcel_req.location != "Custom Parcel" and not parcel_req.geojson and parcel_req.lat is None:
+        catboost_loc = parcel_req.location
+        anchor_name = parcel_req.location
+        anchor_dist_km = 0.0
+    else:
+        catboost_loc = anchor_name
+
     baseline = baseline_valuation(
-        location=parcel_req.location,
+        location=catboost_loc,
         total_sqft=parcel_req.total_sqft,
         bhk=parcel_req.bhk,
         bath=parcel_req.bath,
@@ -53,7 +64,19 @@ def run_simulation_request(req: SimulationRunRequest) -> SimulationRunResponse:
         society=parcel_req.society,
     )
 
-    centroid, geom_wkt = _parcel_centroid(parcel_req)
+    anchor_sqft = baseline.price_per_sqft_inr
+    is_in_landmark = anchor_dist_km <= 0.25
+    decay_factor = round(max(0.40, math.exp(-0.035 * (anchor_dist_km - 0.25))), 4) if not is_in_landmark else 1.0
+
+    baseline.anchor_landmark = anchor_name.title()
+    baseline.anchor_distance_km = round(anchor_dist_km, 2)
+    baseline.anchor_price_per_sqft = anchor_sqft
+    baseline.is_in_landmark = is_in_landmark
+    baseline.distance_decay_factor = decay_factor
+
+    baseline.price_per_sqft_inr = round(anchor_sqft * decay_factor, 2)
+    baseline.predicted_price_inr = int(baseline.price_per_sqft_inr * parcel_req.total_sqft)
+    baseline.predicted_price_lakhs = round(baseline.predicted_price_inr / 100000.0, 2)
 
     repo: Repository = get_repository()
     infra = repo.list_infrastructure()

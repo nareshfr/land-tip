@@ -57,6 +57,15 @@ class InMemoryRepository:
         self._parcels: dict[str, dict] = {}
         self._infra: dict[str, dict] = {}
         self._sims: dict[str, SimulationRecord] = {}
+        self._seed_fixtures()
+
+    def _seed_fixtures(self) -> None:
+        try:
+            from app.scraping.fixtures import FIXTURES
+            for f in FIXTURES:
+                self._infra[f["project_id"]] = dict(f)
+        except Exception:
+            pass
 
     # --- parcels ---
     def save_parcel(self, parcel: dict) -> str:
@@ -105,6 +114,7 @@ class InMemoryRepository:
             self._parcels.clear()
             self._infra.clear()
             self._sims.clear()
+            self._seed_fixtures()
 
 
 # ---------------------------------------------------------------------------

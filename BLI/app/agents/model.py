@@ -24,6 +24,7 @@ import mesa
 from shapely.geometry import Point
 
 from app.agents.demand import HouseholdAgent
+from app.agents.industrial import IndustrialAgent, IndustrialStatus, IndustryType
 from app.agents.infrastructure_agent import InfrastructureDevelopmentAgent
 from app.agents.macro import MacroeconomicAgent
 from app.agents.supply import DeveloperAgent
@@ -87,12 +88,14 @@ class UrbanAlphaModel(mesa.Model):
         use_infrastructure_agent: bool = True,
         use_market_dynamics: bool = True,
         use_impact_engine: bool = True,
+        industrial_firms: int = 5,
     ):
         super().__init__(rng=seed)
         self.baseline = baseline
         self.years = years
         self.current_year = 0
         self.locality = locality or getattr(baseline, "location_used", "")
+        self.industrial_firms = industrial_firms
 
         # Optional centroid resolution.
         if parcel_centroid is None and self.locality:
@@ -119,6 +122,7 @@ class UrbanAlphaModel(mesa.Model):
         self.land_value_per_sqft = float(baseline.price_per_sqft_inr)
         self.land_value_index = 1.0  # Year 0 == 1.0
         self._baseline_utility: float = 0.0
+        self._baseline_developer_margin: float = 0.18
 
         # Demand / supply accumulators reset each step.
         self._demand_utils: list[float] = []
@@ -156,6 +160,40 @@ class UrbanAlphaModel(mesa.Model):
         for _ in range(max(1, developers)):
             DeveloperAgent(self, baseline_price_per_sqft=self.baseline_ppsqft)
         self.infra_agent = InfrastructureDevelopmentAgent(self) if self.use_infrastructure_agent else None
+
+        # Spawn industrial enterprise agents
+        for i in range(max(0, self.industrial_firms)):
+            if i % 3 == 0:
+                itype = IndustryType.HEAVY_MANUFACTURING
+                jobs = 3200
+                sqft = 750_000.0
+                dist = 4.5
+                capex = 350.0
+                budget = 4000.0
+            elif i % 3 == 1:
+                itype = IndustryType.LOGISTICS_WAREHOUSING
+                jobs = 1200
+                sqft = 350_000.0
+                dist = 3.0
+                capex = 90.0
+                budget = 5500.0
+            else:
+                itype = IndustryType.LIGHT_INDUSTRIAL
+                jobs = 850
+                sqft = 180_000.0
+                dist = 2.0
+                capex = 65.0
+                budget = 7500.0
+
+            IndustrialAgent(
+                self,
+                industry_type=itype,
+                target_jobs=jobs,
+                land_footprint_sqft=sqft,
+                max_land_budget_sqft=budget,
+                capex_cr=capex,
+                distance_to_parcel_km=dist,
+            )
 
         # Capture Year-0 demand baseline utility (one demand pass without side effects).
         self._compute_baseline_utility()
@@ -282,12 +320,19 @@ class UrbanAlphaModel(mesa.Model):
         self._developed_units += units
 
     def _compute_baseline_utility(self) -> None:
-        """One demand evaluation pass at Year 0 to anchor demand pressure."""
+        """One evaluation pass at Year 0 to anchor demand utility and developer margin."""
         utils: list[float] = []
         for a in self.agents_by_type.get(HouseholdAgent, []):
             a.step()  # computes utility and would call add_demand_utility
             utils.append(a.utility)
         self._baseline_utility = (sum(utils) / len(utils)) if utils else 0.0
+
+        dev_margins: list[float] = []
+        for d in self.agents_by_type.get(DeveloperAgent, []):
+            d.step()
+            dev_margins.append(d.margin)
+        self._baseline_developer_margin = (sum(dev_margins) / len(dev_margins)) if dev_margins else 0.18
+
         # Discard the side effects used only to measure the baseline.
         self._demand_utils = []
         self._developer_margins = []
@@ -318,6 +363,10 @@ class UrbanAlphaModel(mesa.Model):
             "land_value_per_sqft": round(self.land_value_per_sqft, 2),
             "land_value_index": round(self.land_value_index, 4),
             "active_infrastructure": active,
+            "active_factories": self.total_active_factories,
+            "industrial_jobs_created": self.total_industrial_jobs,
+            "industrial_sqft_absorbed": round(self.total_industrial_sqft, 1),
+            "industrial_employment_gravity": round(self.industrial_employment_gravity, 2),
             "impact": self.impact_scores.as_dict() if self.impact_scores else {},
             "market": self._current_market_state.__dict__ if self._current_market_state else {},
             "growth": self._current_growth.as_dict() if self._current_growth else {},
@@ -338,8 +387,11 @@ class UrbanAlphaModel(mesa.Model):
         self.demand_pressure = (mean_u - self._baseline_utility) / denom
         self.demand_pressure = max(-1.0, min(2.0, self.demand_pressure))
 
-        # Supply pressure: mean developer margin.
+        # Supply pressure: developer margin deviation vs Year-0 baseline margin.
         self.supply_pressure = self._mean(self._developer_margins)
+        dev_margin_denom = max(0.1, abs(getattr(self, "_baseline_developer_margin", 0.18)))
+        developer_deviation = (self.supply_pressure - getattr(self, "_baseline_developer_margin", 0.18)) / dev_margin_denom
+        developer_deviation = max(-1.0, min(1.0, developer_deviation))
 
         if self.use_market_dynamics and self.market_engine is not None:
             infra_inf = self.impact_scores.infrastructure_influence if self.impact_scores else 0.0
@@ -347,7 +399,7 @@ class UrbanAlphaModel(mesa.Model):
             state = MarketState(
                 residential_demand=self.demand_pressure,
                 commercial_demand=comm_demand,
-                developer_demand=self.supply_pressure,
+                developer_demand=developer_deviation,
                 zoning_factor=self.zoning_factor,
                 developed_units=self._developed_units,
                 interest_rate=self.interest_rate,
@@ -389,6 +441,26 @@ class UrbanAlphaModel(mesa.Model):
             self.land_value_index = round(max(0.3, self.land_value_index * (1.0 + growth)), 4)
             self.land_value_per_sqft = round(self.baseline_ppsqft * self.land_value_index, 2)
 
+    @property
+    def total_active_factories(self) -> int:
+        ind_agents = self.agents_by_type.get(IndustrialAgent, [])
+        return sum(1 for a in ind_agents if a.status == IndustrialStatus.OPERATIONAL)
+
+    @property
+    def total_industrial_jobs(self) -> int:
+        ind_agents = self.agents_by_type.get(IndustrialAgent, [])
+        return sum(a.jobs_created for a in ind_agents if a.status == IndustrialStatus.OPERATIONAL)
+
+    @property
+    def total_industrial_sqft(self) -> float:
+        ind_agents = self.agents_by_type.get(IndustrialAgent, [])
+        return sum(a.sqft_absorbed for a in ind_agents if a.status != IndustrialStatus.SCOUTING)
+
+    @property
+    def industrial_employment_gravity(self) -> float:
+        ind_agents = self.agents_by_type.get(IndustrialAgent, [])
+        return sum(a.employment_gravity() for a in ind_agents)
+
     # ------------------------------------------------------------------
     # The Mesa step == one simulation year
     # ------------------------------------------------------------------
@@ -408,11 +480,13 @@ class UrbanAlphaModel(mesa.Model):
         self._developer_margins = []
         self._developed_units = 0
 
-        # Cluster ordering: Macro -> Supply -> Demand.
+        # Cluster ordering: Macro -> Industrial -> Supply -> Demand.
         macro = self.agents_by_type.get(MacroeconomicAgent, [])
+        industrial = self.agents_by_type.get(IndustrialAgent, [])
         developers = self.agents_by_type.get(DeveloperAgent, [])
         households = self.agents_by_type.get(HouseholdAgent, [])
         macro.do("step")
+        industrial.do("step")
         developers.do("step")
         households.do("step")
 

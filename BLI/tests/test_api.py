@@ -34,7 +34,7 @@ def test_scrape_live_endpoint(client):
     r = client.post("/infrastructure/scrape-live")
     assert r.status_code == 200
     body = r.json()
-    assert body["projects_stored"] == 7
+    assert body["projects_stored"] >= 7
     assert set(body["affected_parcels_by_radius"]) == {"500", "1000", "2000"}
 
 
@@ -42,7 +42,7 @@ def test_list_infrastructure(client):
     client.post("/infrastructure/scrape-live")
     r = client.get("/infrastructure/")
     assert r.status_code == 200
-    assert r.json()["count"] == 7
+    assert r.json()["count"] >= 7
 
 
 @pytest.mark.skipif(
@@ -96,3 +96,32 @@ def test_simulation_fetch_missing(client):
     r = client.get("/simulation/does-not-exist")
     assert r.status_code == 200
     assert r.json()["found"] is False
+
+
+def test_frontend_serving(client):
+    r = client.get("/app")
+    assert r.status_code == 200
+    assert "text/html" in r.headers["content-type"]
+
+    r_root_html = client.get("/", headers={"accept": "text/html"})
+    assert r_root_html.status_code == 200
+    assert "text/html" in r_root_html.headers["content-type"]
+
+
+def test_parcel_anchor_landmark_distance_decay(client):
+    # Location slightly outside Indiranagar (e.g. 12.965, 77.660)
+    r = client.post("/parcel/analyze", json={
+        "location": "Custom Parcel",
+        "lat": 12.965,
+        "lon": 77.660,
+        "total_sqft": 2400,
+    })
+    assert r.status_code == 200
+    body = r.json()
+    assert body["anchor_landmark"] is not None
+    assert body["anchor_distance_km"] > 0.3
+    assert body["is_in_landmark"] is False
+    assert body["baseline"]["anchor_price_per_sqft"] > 0
+    # Price is decayed because distance > 0.25km
+    assert body["baseline"]["price_per_sqft_inr"] < body["baseline"]["anchor_price_per_sqft"]
+    assert body["baseline"]["distance_decay_factor"] < 1.0

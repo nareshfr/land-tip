@@ -219,7 +219,7 @@ class PricePredictorPipeline:
         df["sqft_per_room"] = df["total_sqft_clean"] / df["total_rooms"].clip(lower=1.0)
         
         df["area_type"] = df["area_type"].fillna("Super built-up  Area")
-        df["is_plot"] = (df["area_type"].str.strip().str.lower() == "plot area").astype(int)
+        df["is_plot"] = df["area_type"].astype(str).str.lower().str.contains("plot").astype(int)
         
         avail = df["availability"].fillna("Ready To Move").str.lower()
         df["is_ready"] = avail.str.contains("ready|immediate").astype(int)

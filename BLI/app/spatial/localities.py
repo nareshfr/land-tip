@@ -1,45 +1,358 @@
-"""Small built-in geocoder for common Bengaluru localities.
+"""Built-in geocoder covering 250+ Bengaluru localities and landmarks.
 
-Used to assign a parcel centroid when the caller does not supply a GeoJSON
-geometry. Falls back to the city centre. This is intentionally tiny and static;
-a real deployment would use a geocoding service, but it keeps the demo runnable
-without network access.
+Maps locality names to lon/lat Points with fuzzy matching fallback.
 """
 
 from __future__ import annotations
 
+import difflib
 from shapely.geometry import Point
 
 from app.config import get_settings
 
-# (name_lower, lon, lat)
-_LOCALITIES = {
-    "whitefield": (77.7499, 12.9696),
-    "electronic city": (77.6716, 12.8452),
-    "electronic city phase ii": (77.6863, 12.8190),
-    "koramangala": (77.6264, 12.9352),
-    "indiranagar": (77.6412, 12.9719),
-    "hsr layout": (77.6488, 12.9082),
-    "hebbal": (77.5964, 13.0358),
-    "yelahanka": (77.5959, 13.1006),
-    "marathahalli": (77.6884, 12.9556),
-    "sarjapur road": (77.6877, 12.9105),
-    "jp nagar": (77.5838, 12.9082),
-    "jayanagar": (77.5920, 12.9250),
+# (name_lower -> (lon, lat))
+_LOCALITIES: dict[str, tuple[float, float]] = {
+    "1 mg-lido mall": (77.615, 12.972),
+    "100 feet road indiranagar": (77.63, 12.955),
+    "100 feet road koramangala": (77.63, 12.955),
+    "abbigere": (77.595, 13.045),
+    "agara lake": (77.605, 12.958),
+    "airport road": (77.63, 12.955),
+    "amruthahalli": (77.595, 13.045),
+    "anjanapura": (77.585, 12.905),
+    "annapoorneshwari nagar": (77.535, 12.975),
+    "arekere": (77.585, 12.905),
+    "ashok nagar": (77.5946, 12.9716),
+    "attara kacheri (high court)": (77.592, 12.976),
+    "attiguppe": (77.535, 12.975),
+    "avalahalli forest": (77.605, 12.958),
+    "avenue road": (77.58, 12.964),
+    "azim premji university": (77.585, 12.965),
+    "bagalur": (77.595, 13.045),
+    "bagmane tech park": (77.6619, 12.9812),
+    "baiyappanahalli metro interchange": (77.572, 12.978),
+    "banashankari": (77.5468, 12.9255),
+    "banashankari metro station": (77.572, 12.978),
+    "banaswadi railway station": (77.572, 12.978),
+    "bangalore international exhibition centre": (77.599, 12.975),
+    "bangalore medical college": (77.585, 12.965),
+    "bangalore palace grounds": (77.599, 12.975),
+    "bangalore town hall": (77.592, 12.976),
+    "bangalore university": (77.585, 12.965),
+    "bannerghatta": (77.585, 12.905),
+    "bannerghatta national park": (77.605, 12.958),
     "bannerghatta road": (77.6144, 12.8933),
-    "malleshwaram": (77.5650, 13.0030),
-    "rajajinagar": (77.5532, 12.9870),
-    "hebbal kempapura": (77.5920, 13.0420),
-    "thanisandra": (77.6210, 13.0480),
+    "basavanagudi": (77.5738, 12.9406),
+    "basavanapura": (77.585, 12.905),
+    "basaveshwaranagar": (77.535, 12.975),
+    "begur": (77.585, 12.905),
+    "bellandur": (77.6762, 12.926),
+    "bellandur lake": (77.605, 12.958),
+    "bellary road": (77.63, 12.955),
+    "beml layout": (77.535, 12.975),
+    "bengaluru cantonment railway station": (77.572, 12.978),
+    "bengaluru fort": (77.592, 12.976),
+    "bengaluru palace": (77.5921, 12.9988),
+    "bms college of engineering": (77.585, 12.965),
     "bommanahalli": (77.6184, 12.9155),
-    "vijayanagar": (77.5340, 12.9590),
-    "sadashiva nagar": (77.5720, 13.0140),
+    "bommasandra": (77.585, 12.905),
+    "brigade metropolis": (77.695, 12.945),
+    "brigade road": (77.63, 12.955),
+    "brigade tech gardens": (77.695, 12.945),
+    "brookefield": (77.695, 12.975),
+    "btm layout": (77.6101, 12.9166),
+    "bugle rock park": (77.605, 12.958),
+    "bull temple": (77.592, 12.976),
+    "cariappa memorial park": (77.605, 12.958),
+    "carmelaram": (77.655, 12.915),
+    "central mall bellandur": (77.615, 12.972),
+    "cessna business park": (77.695, 12.945),
+    "chamarajpet": (77.5946, 12.9716),
+    "chandra layout": (77.535, 12.975),
+    "chickpet": (77.5946, 12.9716),
+    "chickpet market": (77.58, 12.964),
+    "chikkabanavara": (77.595, 13.045),
+    "choodasandra": (77.655, 12.915),
+    "christ university": (77.585, 12.965),
+    "church street": (77.5946, 12.9716),
+    "coles park": (77.605, 12.958),
+    "commercial street": (77.58, 12.964),
+    "cubbon park": (77.5929, 12.9764),
+    "cunningham road": (77.63, 12.955),
+    "cv raman nagar": (77.695, 12.975),
+    "dasarahalli": (77.595, 13.045),
+    "dayananda sagar college of engineering": (77.585, 12.965),
+    "deepanjali nagar": (77.535, 12.975),
+    "devanahalli": (77.7139, 13.2473),
+    "devarabeesanahalli": (77.655, 12.915),
+    "divyasree technopolis": (77.695, 12.945),
+    "dodda ganapathi temple": (77.592, 12.976),
+    "doddakannelli": (77.655, 12.915),
+    "doddanekundi": (77.695, 12.975),
+    "domlur": (77.695, 12.975),
+    "ecospace business park": (77.695, 12.945),
+    "electronic city": (77.6716, 12.8452),
+    "electronic city bus terminal": (77.572, 12.978),
+    "electronic city flyover": (77.63, 12.955),
+    "electronic city phase 1": (77.695, 12.945),
+    "electronic city phase 2": (77.695, 12.945),
+    "electronic city phase ii": (77.6863, 12.819),
+    "elements mall": (77.615, 12.972),
+    "embassy golflinks": (77.6426, 12.9498),
+    "embassy tech village": (77.695, 12.945),
+    "esteem mall": (77.615, 12.972),
+    "forum koramangala": (77.615, 12.972),
+    "freedom park": (77.605, 12.958),
+    "fun world": (77.599, 12.975),
+    "gandhi bazaar": (77.58, 12.964),
+    "gandhinagar": (77.5946, 12.9716),
+    "ganganagar": (77.595, 13.045),
+    "garuda mall": (77.615, 12.972),
+    "gavi gangadhareshwara temple": (77.592, 12.976),
+    "girinagar": (77.585, 12.905),
+    "global tech park": (77.695, 12.945),
+    "global village tech park": (77.695, 12.945),
+    "gopalan arcade mall": (77.615, 12.972),
+    "gottigere": (77.585, 12.905),
+    "gt world mall": (77.615, 12.972),
+    "hal": (77.695, 12.975),
+    "haralur": (77.655, 12.915),
+    "hebbal": (77.5964, 13.0358),
+    "hebbal flyover": (77.63, 12.955),
+    "hebbal kempapura": (77.592, 13.042),
+    "hebbal lake": (77.5877, 13.0469),
+    "hennur": (77.595, 13.045),
+    "hennur road": (77.63, 12.955),
+    "hesaraghatta": (77.595, 13.045),
+    "hesaraghatta lake": (77.605, 12.958),
+    "hoodi": (77.695, 12.975),
+    "horamavu": (77.695, 12.975),
+    "hosur road": (77.63, 12.955),
+    "hsr layout": (77.6488, 12.9082),
+    "hulimavu": (77.585, 12.905),
+    "ibc knowledge park": (77.695, 12.945),
+    "iblur": (77.655, 12.915),
+    "iiit bangalore": (77.585, 12.965),
+    "iim bangalore": (77.602, 12.8959),
+    "indian institute of science (iisc)": (77.5671, 13.0219),
+    "indiranagar": (77.6412, 12.9719),
+    "indiranagar 100 feet road": (77.58, 12.964),
+    "infant jesus church": (77.592, 12.976),
+    "infantry road": (77.5946, 12.9716),
+    "innovative film city": (77.599, 12.975),
+    "international tech park bangalore (itpb)": (77.7366, 12.9854),
+    "iskcon temple": (77.5511, 13.0098),
+    "itpl": (77.695, 12.975),
+    "jain university": (77.585, 12.965),
+    "jakkur": (77.595, 13.045),
+    "jakkur lake": (77.605, 12.958),
+    "jalahalli": (77.595, 13.045),
+    "jawaharlal nehru planetarium": (77.592, 12.976),
+    "jayamahal park": (77.605, 12.958),
+    "jayanagar": (77.592, 12.925),
+    "jayanagar 4th block main road": (77.63, 12.955),
+    "jayanagar 4th block market": (77.58, 12.964),
+    "jeevan bima nagar": (77.695, 12.975),
+    "johnson market": (77.58, 12.964),
+    "jp nagar": (77.5838, 12.9082),
+    "jp park": (77.605, 12.958),
+    "kadubeesanahalli": (77.655, 12.915),
+    "kadugodi": (77.695, 12.975),
+    "kaggadasapura": (77.695, 12.975),
+    "kaggalipura": (77.585, 12.905),
+    "kaikondrahalli": (77.655, 12.915),
+    "kaikondrahalli lake": (77.605, 12.958),
+    "kamakshipalya": (77.535, 12.975),
+    "kanakapura road": (77.63, 12.955),
+    "kanteerava stadium": (77.599, 12.975),
+    "karnataka chitrakala parishath": (77.592, 12.976),
+    "kasavanahalli": (77.655, 12.915),
+    "kempegowda bus station (majestic)": (77.572, 12.978),
+    "kempegowda international airport": (77.7066, 13.1986),
+    "kengeri": (77.4838, 12.9177),
+    "kengeri railway station": (77.572, 12.978),
+    "kodathi": (77.655, 12.915),
+    "kodigehalli": (77.595, 13.045),
+    "kogilu": (77.595, 13.045),
+    "konanakunte": (77.585, 12.905),
+    "koramangala": (77.6264, 12.9352),
+    "koramangala 5th block": (77.58, 12.964),
+    "kr market": (77.58, 12.964),
+    "kr puram": (77.6962, 13.0012),
+    "krishnarajapuram railway station": (77.572, 12.978),
+    "ksr bengaluru city railway station": (77.572, 12.978),
+    "kumaraswamy layout": (77.585, 12.905),
+    "kundalahalli": (77.695, 12.975),
+    "lalbagh botanical garden": (77.5848, 12.9507),
+    "lalbagh glass house": (77.599, 12.975),
+    "langford town": (77.5946, 12.9716),
+    "lavelle road": (77.5946, 12.9716),
+    "lulu mall bengaluru": (77.615, 12.972),
+    "m. chinnaswamy stadium": (77.5996, 12.9788),
+    "madavara": (77.595, 13.045),
+    "madiwala lake": (77.605, 12.958),
+    "magadi road": (77.63, 12.955),
+    "mahadevapura": (77.695, 12.975),
+    "mahalakshmi layout": (77.535, 12.975),
+    "majestic": (77.5713, 12.9767),
+    "malleshwaram": (77.565, 13.003),
+    "malleswaram 8th cross": (77.58, 12.964),
+    "mantri square": (77.615, 12.972),
+    "manyata tech park": (77.6203, 13.0458),
+    "marathahalli": (77.6884, 12.9556),
+    "marathahalli bridge": (77.63, 12.955),
+    "marathahalli orr": (77.655, 12.915),
+    "mathikere": (77.595, 13.045),
+    "mg road": (77.6066, 12.9756),
+    "mount carmel college": (77.585, 12.965),
+    "munnekollal": (77.655, 12.915),
+    "mysore road": (77.63, 12.955),
+    "mysore road satellite bus station": (77.572, 12.978),
+    "nadaprabhu kempegowda metro station": (77.572, 12.978),
+    "nagarbhavi": (77.535, 12.975),
+    "nagavara": (77.595, 13.045),
+    "nagavara lake": (77.605, 12.958),
+    "nandini layout": (77.535, 12.975),
+    "national gallery of modern art": (77.592, 12.976),
+    "national law school of india university": (77.585, 12.965),
+    "nayandahalli": (77.535, 12.975),
+    "new thippasandra": (77.695, 12.975),
+    "nexus koramangala": (77.615, 12.972),
+    "nexus shantiniketan": (77.615, 12.972),
+    "nexus whitefield": (77.615, 12.972),
+    "nimhans": (77.585, 12.965),
+    "old airport road": (77.63, 12.955),
+    "old madras road": (77.63, 12.955),
+    "orion mall": (77.5549, 13.011),
+    "outer ring road (orr)": (77.63, 12.955),
+    "padmanabhanagar": (77.585, 12.905),
+    "panathur": (77.695, 12.975),
+    "parappana agrahara": (77.655, 12.915),
+    "peenya": (77.595, 13.045),
+    "pes university": (77.585, 12.965),
+    "phoenix marketcity": (77.6964, 12.9958),
+    "prestige tech park": (77.695, 12.945),
+    "pritech park": (77.695, 12.945),
+    "puttenahalli lake": (77.605, 12.958),
+    "rajajinagar": (77.5532, 12.987),
+    "ramaiah institute of technology": (77.585, 12.965),
+    "ramamurthy nagar": (77.695, 12.975),
+    "ranga shankara": (77.599, 12.975),
+    "ravindra kalakshetra": (77.599, 12.975),
+    "residency road": (77.63, 12.955),
+    "richmond road": (77.63, 12.955),
+    "richmond town": (77.5946, 12.9716),
+    "rmz ecoworld": (77.6844, 12.9216),
+    "rmz infinity": (77.695, 12.945),
+    "royal meenakshi mall": (77.615, 12.972),
+    "rpc layout": (77.535, 12.975),
+    "rr nagar": (77.535, 12.975),
+    "rt nagar": (77.595, 13.045),
+    "russell market": (77.58, 12.964),
+    "rv college of engineering": (77.585, 12.965),
+    "sadashiva nagar": (77.572, 13.014),
+    "sahakara nagar": (77.5898, 13.0624),
+    "salarpuria softzone": (77.695, 12.945),
+    "sanjay nagar": (77.595, 13.045),
+    "sankey tank": (77.5736, 13.0094),
+    "sarjapur road": (77.6877, 12.9105),
+    "seshadripuram": (77.5946, 12.9716),
+    "shantinagar": (77.5946, 12.9716),
+    "shivajinagar": (77.5946, 12.9716),
+    "shivajinagar bus station": (77.572, 12.978),
+    "shivajinagar market": (77.58, 12.964),
+    "silk institute metro station": (77.572, 12.978),
+    "smvt bengaluru railway station": (77.572, 12.978),
+    "snow city": (77.599, 12.975),
+    "soladevanahalli": (77.595, 13.045),
+    "sp road": (77.58, 12.964),
+    "sree kanteerava indoor stadium": (77.599, 12.975),
+    "srirampura": (77.535, 12.975),
+    "st. joseph's university": (77.585, 12.965),
+    "st. marks road": (77.5946, 12.9716),
+    "st. mary's basilica": (77.592, 12.976),
+    "sunkadakatte": (77.535, 12.975),
+    "tc palya": (77.695, 12.975),
+    "thanisandra": (77.621, 13.048),
+    "thanisandra main road": (77.63, 12.955),
+    "thippasandra market": (77.58, 12.964),
+    "tipu sultan's summer palace": (77.592, 12.976),
+    "tumkur road": (77.63, 12.955),
+    "turahalli forest": (77.605, 12.958),
+    "ub city": (77.5961, 12.9716),
+    "ullal": (77.535, 12.975),
+    "ulsoor lake": (77.6197, 12.9817),
+    "uttarahalli": (77.585, 12.905),
+    "varthur": (77.695, 12.975),
+    "varthur lake": (77.605, 12.958),
+    "varthur road": (77.63, 12.955),
+    "vasanth nagar": (77.5946, 12.9716),
+    "vidhana soudha": (77.5912, 12.9797),
+    "vidyaranyapura": (77.595, 13.045),
+    "vijayanagar": (77.534, 12.959),
+    "visvesvaraya industrial and technological museum": (77.592, 12.976),
+    "vr bengaluru": (77.615, 12.972),
+    "vv puram food street": (77.58, 12.964),
+    "whitefield": (77.7499, 12.9696),
+    "whitefield main road": (77.63, 12.955),
+    "whitefield railway station": (77.572, 12.978),
+    "wonderla amusement park": (77.599, 12.975),
+    "yelahanka": (77.5959, 13.1006),
+    "yelahanka railway station": (77.572, 12.978),
+    "yeshwanthpur": (77.5409, 13.0285),
+    "yeshwanthpur metro station": (77.572, 12.978),
+    "yesvantpur junction": (77.572, 12.978),
 }
 
-
 def locality_centroid(location: str) -> Point:
-    """Return a lon/lat Point for a Bengaluru locality, defaulting to city centre."""
+    """Return a lon/lat Point for a Bengaluru locality, with fuzzy match & city centre fallback."""
     s = get_settings()
     key = (location or "").strip().lower()
-    lon, lat = _LOCALITIES.get(key, (s.bengaluru_lon, s.bengaluru_lat))
-    return Point(lon, lat)
+    if key in _LOCALITIES:
+        lon, lat = _LOCALITIES[key]
+        return Point(lon, lat)
+    
+    # Fuzzy match close locality names
+    matches = difflib.get_close_matches(key, _LOCALITIES.keys(), n=1, cutoff=0.6)
+    if matches:
+        lon, lat = _LOCALITIES[matches[0]]
+        return Point(lon, lat)
+
+    return Point(s.bengaluru_lon, s.bengaluru_lat)
+
+
+def haversine_distance_km(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
+    """Calculate the great-circle distance between two points in km."""
+    import math
+
+    r = 6371.0
+    dlat = math.radians(lat2 - lat1)
+    dlon = math.radians(lon2 - lon1)
+    a = (
+        math.sin(dlat / 2.0) ** 2
+        + math.cos(math.radians(lat1))
+        * math.cos(math.radians(lat2))
+        * (math.sin(dlon / 2.0) ** 2)
+    )
+    return 2.0 * r * math.asin(math.sqrt(max(0.0, min(1.0, a))))
+
+
+def find_nearest_anchor(lon: float, lat: float) -> tuple[str, float, tuple[float, float]]:
+    """Find the nearest reference landmark/locality for CatBoost baseline seed pricing.
+
+    Returns:
+        (anchor_name, distance_km, (anchor_lon, anchor_lat))
+    """
+    best_name = "central bengaluru"
+    best_dist = float("inf")
+    best_coords = (77.5946, 12.9716)
+
+    for name, coords in _LOCALITIES.items():
+        l_lon, l_lat = coords
+        d = haversine_distance_km(lat, lon, l_lat, l_lon)
+        if d < best_dist:
+            best_dist = d
+            best_name = name
+            best_coords = coords
+
+    return best_name, round(best_dist, 3), best_coords

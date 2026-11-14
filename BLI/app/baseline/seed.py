@@ -24,8 +24,9 @@ from threading import Lock
 from typing import Optional
 
 from app.config import get_settings
-from app.schemas import BaselineValuation
-from app.baseline.land_adjust import LandBaselineAdjuster, apply_land_confidence
+from app.schemas import BaselineValuation, FeatureAttribution, ModelStats
+from app.baseline.land_adjust import LandBaselineAdjuster, apply_land_confidence, _is_plot_area
+from app.calibration.data import get_locality_model_stats
 
 logger = logging.getLogger(__name__)
 
@@ -37,6 +38,7 @@ if str(_PROJECT_ROOT) not in sys.path:
 try:
     from predict_price import (  # type: ignore[import-not-found]
         ALL_FEATURES,
+        CAT_FEATURES,
         PricePredictorPipeline,
     )
 except Exception as exc:  # pragma: no cover - depends on root module presence
@@ -117,7 +119,7 @@ class BaselineSeed:
 
         # Phase 1 (v1.1): verify the baseline asset type. The CatBoost model is a
         # house-price model; derive a land-only baseline from its prediction.
-        is_plot = bool(feature_vector.get("is_plot", 0))
+        is_plot = bool(feature_vector.get("is_plot", 0)) or _is_plot_area(area_type)
         adjuster = LandBaselineAdjuster()
         adj = adjuster.adjust(
             house_price_lakhs=raw["predicted_price_lakhs"],
@@ -135,6 +137,15 @@ class BaselineSeed:
         baseline_raw["structure_value_lakhs"] = adj.structure_value_lakhs
         baseline_raw["baseline_note"] = adj.note
 
+        # TreeSHAP feature attributions computed dynamically for this specific parcel & locality
+        shap_attributions = self._shap_attributions(
+            location, total_sqft, bhk, bath, balcony, area_type, availability, society
+        )
+
+        # Out-of-sample cross-validation metrics for this specific locality
+        stats_data = get_locality_model_stats(location)
+        model_stats = ModelStats(**stats_data)
+
         return BaselineValuation(
             predicted_price_lakhs=round(land_price_lakhs, 2),
             predicted_price_inr=land_price_inr,
@@ -149,10 +160,82 @@ class BaselineSeed:
             asset_type=adj.asset_type,
             baseline_method=adj.baseline_method,
             house_price_lakhs=adj.house_price_lakhs,
+            r2_score=model_stats.r2_score,
+            mae_lakhs=model_stats.rmse_lakhs,
+            model_stats=model_stats,
+            shap_attributions=shap_attributions,
             raw=baseline_raw,
         )
 
     # --- internals ---
+    def _shap_attributions(
+        self, location, total_sqft, bhk, bath, balcony, area_type, availability, society
+    ) -> list[FeatureAttribution]:
+        """Compute exact TreeSHAP feature attributions for this specific parcel."""
+        pipe = self._ensure_loaded()
+        import pandas as pd
+        from catboost import Pool
+
+        feature_labels = {
+            "location_grouped": "Locality Spatial Premium",
+            "area_type": "Zoning & Area Classification",
+            "total_sqft_clean": "Parcel Area / Extent",
+            "log_sqft": "Scale & Dimensions",
+            "society_grouped": "Layout / Developer Pedigree",
+            "has_society": "Gated Community Status",
+            "sqft_per_room": "Spatial Efficiency Density",
+            "sqft_per_bhk": "Floor Plate Utilization",
+            "total_rooms": "Development Capacity (BHK)",
+            "bhk": "Room Configuration",
+            "bath": "Sanitary Facilities Ratio",
+            "balcony": "Ventilation & Open Area",
+            "is_plot": "Plot vs Apartment Classification",
+            "is_ready": "Execution Readiness",
+            "bath_to_bhk": "Bathroom-to-Room Ratio",
+            "bath_diff_bhk": "Bathroom Variance",
+        }
+
+        sample_df = pd.DataFrame([{
+            "location": location,
+            "total_sqft": total_sqft,
+            "total_sqft_clean": float(total_sqft),
+            "bhk": float(bhk),
+            "size": f"{int(bhk)} BHK",
+            "bath": float(bath),
+            "balcony": float(balcony),
+            "area_type": area_type,
+            "availability": availability,
+            "society": society,
+        }])
+        proc = pipe.transform_features(sample_df)
+        pool = Pool(proc[ALL_FEATURES], cat_features=CAT_FEATURES)
+        shap_vals = pipe.model.get_feature_importance(pool, type="ShapValues")[0][:-1]
+
+        ranked = sorted(zip(ALL_FEATURES, shap_vals), key=lambda x: abs(x[1]), reverse=True)
+        top_4 = ranked[:4]
+        total_abs = sum(abs(v) for _, v in ranked) or 1.0
+
+        items: list[FeatureAttribution] = []
+        accum_pct = 0.0
+        for feat, v in top_4:
+            pct = round((abs(v) / total_abs) * 100.0, 1)
+            accum_pct += pct
+            items.append(FeatureAttribution(
+                feature=feat,
+                label=feature_labels.get(feat, feat),
+                importance_pct=pct,
+                direction="+" if v >= 0 else "-"
+            ))
+
+        residual_pct = max(0.0, round(100.0 - accum_pct, 1))
+        items.append(FeatureAttribution(
+            feature="other_residual",
+            label="Other / Residual Model Features",
+            importance_pct=residual_pct,
+            direction="+"
+        ))
+        return items
+
     def _feature_vector(
         self, location, total_sqft, bhk, bath, balcony, area_type, availability, society
     ) -> dict:

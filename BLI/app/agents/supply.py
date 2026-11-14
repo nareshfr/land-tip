@@ -31,7 +31,7 @@ class DeveloperAgent(mesa.Agent):
         self.baseline_ppsqft = float(baseline_price_per_sqft)
         self.reservation_ppsqft = float(baseline_price_per_sqft)
         self.capital = float(capital)
-        self.margin = 0.0
+        self.margin = 0.18
         self.developed_units = 0
 
     # ------------------------------------------------------------------
@@ -46,10 +46,16 @@ class DeveloperAgent(mesa.Agent):
         financing_rate = (m.interest_rate / 100.0) * m.risk_multiplier
         financing_cost = (land_cost + construction_cost) * self.LEVERAGE * financing_rate
 
-        # Expected revenue/sqft: baseline * demand pressure * zoning allowance.
+        # Total development cost per sqft
+        total_cost = land_cost + construction_cost + financing_cost
+
+        # Expected revenue/sqft of developed units: covers total development cost with a target
+        # markup scaled by household demand pressure, zoning allowance, and commercial catalyst boost.
         demand_pressure = max(0.5, min(2.0, 1.0 + m.demand_pressure))
         comm_boost = (1.0 + 0.10 * m.impact_scores.commercial) if getattr(m, "impact_scores", None) else 1.0
-        expected_revenue = self.baseline_ppsqft * demand_pressure * m.zoning_factor * comm_boost
+        ind_jobs = getattr(m, "total_industrial_jobs", 0)
+        ind_boost = (1.0 + min(0.12, (ind_jobs / 10000.0) * 0.05)) if ind_jobs > 0 else 1.0
+        expected_revenue = (total_cost * 1.22) * demand_pressure * (1.0 + 0.05 * (m.zoning_factor - 1.0)) * comm_boost * ind_boost
 
         # Reservation price rises with land value so future land cost tracks the market.
         self.reservation_ppsqft = max(
@@ -57,7 +63,6 @@ class DeveloperAgent(mesa.Agent):
             0.7 * self.reservation_ppsqft + 0.3 * m.land_value_per_sqft,
         )
 
-        total_cost = land_cost + construction_cost + financing_cost
         self.margin = (expected_revenue - total_cost) / max(1.0, expected_revenue)
 
         # Develop if feasible and capital allows; capital scales with availability.

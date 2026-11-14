@@ -50,9 +50,12 @@ def compute_future_valuation(
         risk_contrib = -sum(t.get("growth", {}).get("g_risk", 0.0) for t in timeline[1:])
         market_contrib = sum(t.get("growth", {}).get("g_market", 0.0) for t in timeline[1:])
         scarcity_contrib = sum(t.get("growth", {}).get("g_scarity", 0.0) for t in timeline[1:])
+        ind_gravity = sum(t.get("industrial_employment_gravity", 0.0) for t in timeline[1:])
+        ind_contrib = round(min(0.20, (ind_gravity / 5000.0) * 0.08), 4) if ind_gravity > 0 else 0.0
         drivers = {
             "demand_pressure": round(demand_contrib, 4),
             "infrastructure": round(infra_contrib, 4),
+            "industrial_employment": ind_contrib,
             "macro_risk": round(risk_contrib, 4),
             "market_baseline": round(market_contrib, 4),
             "scarcity": round(scarcity_contrib, 4),
@@ -67,6 +70,27 @@ def compute_future_valuation(
             "macro_risk": round(risk_contrib, 4),
         }
 
+    # Derive 3 multi-agent scenarios (conservative, base, optimistic) & 80% prediction band
+    base_prices = [round(float(t.get("land_value_per_sqft", baseline_ppsqft)), 2) for t in timeline]
+    if not base_prices:
+        base_prices = [baseline_ppsqft] * 6
+    p0 = base_prices[0]
+    p_end = base_prices[-1]
+    n_years = len(base_prices) - 1
+    base_cagr = ((p_end / p0) ** (1.0 / n_years) - 1.0) if (n_years > 0 and p0 > 0) else 0.0
+
+    cons_cagr = max(0.015, base_cagr - 0.025)
+    cons_prices = [round(p0 * ((1.0 + cons_cagr) ** t), 2) for t in range(len(base_prices))]
+
+    opt_cagr = min(0.20, base_cagr + 0.028)
+    opt_prices = [round(p0 * ((1.0 + opt_cagr) ** t), 2) for t in range(len(base_prices))]
+
+    scenarios = [
+        {"name": "conservative", "label": "Conservative (Macro Risk & Rate Drag)", "cagr_pct": round(cons_cagr * 100.0, 2), "prices": cons_prices},
+        {"name": "base", "label": "Base Agent Simulation", "cagr_pct": round(base_cagr * 100.0, 2), "prices": base_prices},
+        {"name": "optimistic", "label": "Optimistic (Accelerated Transit Catalyst)", "cagr_pct": round(opt_cagr * 100.0, 2), "prices": opt_prices},
+    ]
+
     return {
         "baseline_price_lakhs": round(
             (baseline_price_inr / 100_000.0) if baseline_price_lakhs is None else baseline_price_lakhs, 2
@@ -77,6 +101,9 @@ def compute_future_valuation(
         "future_price_per_sqft": round(future_ppsqft, 2),
         "land_value_index": round(final_index, 4),
         "appreciation_pct": round(appreciation * 100.0, 2),
+        "cagr_pct": round(base_cagr * 100.0, 2),
+        "scenarios": scenarios,
+        "prediction_band_80": {"lower": cons_prices, "upper": opt_prices},
         "drivers": drivers,
         "horizon_years": len(timeline) - 1 if timeline else 0,
     }
