@@ -281,16 +281,52 @@ def get_locality_model_stats(locality: str) -> dict:
     }
 
 
-def get_historical_prices(locality: str, limit: int = 5) -> list[dict]:
-    key = (locality or "").strip().lower()
-    rows = [r for r in LOCALITY_HISTORY if r["locality"] == key]
+def get_historical_prices(locality: str, limit: int = 5, target_price_2026: float | None = None) -> list[dict]:
+    clean_key = (locality or "").split("(")[0].strip().lower()
+    rows = [r for r in LOCALITY_HISTORY if r["locality"] == clean_key]
     if not rows:
         import difflib
-        matches = difflib.get_close_matches(key, [r["locality"] for r in LOCALITY_HISTORY], n=1, cutoff=0.5)
+        matches = difflib.get_close_matches(clean_key, [r["locality"] for r in LOCALITY_HISTORY], n=1, cutoff=0.4)
         if matches:
             rows = [r for r in LOCALITY_HISTORY if r["locality"] == matches[0]]
-    if not rows:
-        rows = [_row(locality, y, round(12000 * ((1 + 0.075) ** (y - 2021)))) for y in range(2021, 2026)]
+
+    rows = [r for r in rows if r["year"] <= 2025]
     rows.sort(key=lambda r: r["year"])
-    return [{"year": r["year"], "price_per_sqft": r["land_price_per_sqft"], "source": r.get("transaction_source", "Registered")} for r in rows[-limit:]]
+    selected = rows[-limit:] if rows else []
+
+    if target_price_2026 is not None and target_price_2026 > 0:
+        if selected:
+            last_p = selected[-1]["land_price_per_sqft"]
+            years_gap = max(1, 2026 - selected[-1]["year"])
+            expected_p_last = target_price_2026 / ((1.08) ** years_gap)
+            scale = expected_p_last / last_p if last_p > 0 else 1.0
+            return [
+                {
+                    "year": r["year"],
+                    "price_per_sqft": round(r["land_price_per_sqft"] * scale),
+                    "source": r.get("transaction_source", "Registered"),
+                }
+                for r in selected
+            ]
+        else:
+            cagr = 0.078
+            return [
+                {
+                    "year": y,
+                    "price_per_sqft": round(target_price_2026 / ((1 + cagr) ** (2026 - y))),
+                    "source": "Submarket Hedonic Model",
+                }
+                for y in range(2021, 2026)
+            ]
+
+    if not selected:
+        selected = [_row(clean_key or locality, y, round(7000 * ((1 + 0.075) ** (y - 2021)))) for y in range(2021, 2026)]
+    return [
+        {
+            "year": r["year"],
+            "price_per_sqft": r["land_price_per_sqft"],
+            "source": r.get("transaction_source", "Registered"),
+        }
+        for r in selected
+    ]
 

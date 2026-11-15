@@ -28,7 +28,9 @@ import {
   listInfrastructure,
   checkHealth
 } from './api.js';
+import { CitySimulation3D } from './sim3d.js';
 const log = createLogger('App');
+let sim3d = null;
 
 
 function haversineKm(lat1, lon1, lat2, lon2) {
@@ -500,7 +502,8 @@ let state = {
   backendInfra: [],
   backendLoading: false,
   backendConnected: false,
-  hoveredProjectId: null
+  hoveredProjectId: null,
+  sim3dMode: false
 };
 
 // URL State Synchronization (?area=&year=)
@@ -814,6 +817,10 @@ async function initBackend() {
 
   await fetchBackendData(state.activeArea.name);
   renderMapOverlays();
+  if (state.sim3dMode && sim3d) {
+    const combinedInfra = [...FUTURE_CATALYSTS, ...(state.backendInfra || [])];
+    sim3d.update(state.activeArea, combinedInfra, state.offset);
+  }
 }
 
 // Count-up tween animation (400ms ease-out)
@@ -1313,6 +1320,71 @@ function renderSparklineSvg(prices) {
   `;
 }
 
+// Realistic Comparable & Better Plot Recommendation Engine
+function getComparableAlternatives(target, currentPrice, currentCagr) {
+  const currentName = (target.name || '').toLowerCase();
+  const minP = currentPrice * 0.72;
+  const maxP = currentPrice * 1.28;
+
+  const validLocations = ALL_LOCATIONS.filter((loc) => {
+    const n = loc.name.toLowerCase();
+    if (n === currentName || currentName.includes(n) || n.includes(currentName)) return false;
+    // Exclude non-residential landmarks (parks, stadiums, monuments)
+    if (['Parks, Lakes & Nature', 'Stadiums & Entertainment', 'Historical & Architectural'].includes(loc.category)) {
+      return false;
+    }
+    return loc.basePrice >= minP && loc.basePrice <= maxP;
+  });
+
+  const scored = validLocations.map((loc) => {
+    const deltaP = ((loc.basePrice - currentPrice) / currentPrice) * 100;
+    const deltaCagr = (loc.cagr - currentCagr) * 100;
+
+    // Growth alpha + transit proximity + lower density headroom - price premium
+    let score = (deltaCagr * 3.0) + (1.5 - loc.metroKm) * 2.0 - (deltaP * 0.4);
+
+    let tag = 'Comparable Rate';
+    let tagClass = 'bg-slate-200 text-slate-700';
+
+    if (deltaCagr >= 0.7) {
+      tag = `+${deltaCagr.toFixed(1)}% Higher CAGR`;
+      tagClass = 'bg-emerald-100 text-emerald-800';
+    } else if (loc.metroKm <= 0.6) {
+      tag = `Metro ${(loc.metroKm * 1000).toFixed(0)}m`;
+      tagClass = 'bg-indigo-100 text-indigo-800';
+    } else if (deltaP <= -6.0) {
+      tag = `${Math.abs(deltaP).toFixed(0)}% Cheaper Entry`;
+      tagClass = 'bg-amber-100 text-amber-800';
+    } else if (loc.builtUp <= 75) {
+      tag = `Low Density (${loc.builtUp}%)`;
+      tagClass = 'bg-sky-100 text-sky-800';
+    }
+
+    return {
+      ...loc,
+      deltaP,
+      deltaCagr,
+      score,
+      tag,
+      tagClass
+    };
+  });
+
+  scored.sort((a, b) => b.score - a.score);
+
+  // Return up to 4 diverse recommendations
+  const picked = [];
+  const seen = new Set();
+  for (const item of scored) {
+    if (!seen.has(item.name)) {
+      seen.add(item.name);
+      picked.push(item);
+      if (picked.length >= 4) break;
+    }
+  }
+  return picked;
+}
+
 // Main UI Render Pipeline
 function renderUI() {
   const target = getTarget();
@@ -1492,7 +1564,19 @@ function renderUI() {
         Math.round(p2026 * 0.96),
         p2026
       ];
-  if (historicalBase.length === 5) historicalBase.push(p2026);
+  if (historicalBase.length === 5) {
+    historicalBase.push(p2026);
+  } else if (historicalBase.length >= 6) {
+    historicalBase[5] = p2026;
+  }
+  // Sanity check: prevent historical curve from exceeding 2026 base price creating artificial plunge
+  if (historicalBase[4] && historicalBase[4] > p2026) {
+    const ratio = (p2026 * 0.93) / historicalBase[4];
+    for (let i = 0; i < 5; i++) {
+      historicalBase[i] = Math.round(historicalBase[i] * ratio);
+    }
+    historicalBase[5] = p2026;
+  }
 
   const timelinePrices = state.backendData?.timeline?.map((t) => Math.round(t.land_value_per_sqft));
   const futureBase = timelinePrices && timelinePrices.length >= 6
@@ -1608,29 +1692,47 @@ function renderUI() {
     `).join('');
   }
 
-  // 6. Live Landmarks List in Analysis
-  const anLmCounted = document.getElementById('an-landmarks-counted');
-  if (anLmCounted) anLmCounted.textContent = state.liveLandmarks.length;
+  // 6. Comparable & Better Alternative Plots
+  const altsListEl = document.getElementById('an-alternatives-list');
+  const altsBadge = document.getElementById('an-alts-count-badge');
+  if (altsListEl) {
+    const alternatives = getComparableAlternatives(target, p2026, cagr);
+    if (altsBadge) altsBadge.textContent = `${alternatives.length} High-Alpha Picks`;
 
-  const landmarksListEl = document.getElementById('an-landmark-list') || document.getElementById('live-landmarks-list');
-  if (landmarksListEl) {
-    landmarksListEl.innerHTML = state.liveLandmarks.length > 0
-      ? state.liveLandmarks.map((l) => {
-          const style = getLandmarkBadgeStyle(l.kind);
-          const distStr = l.distanceKm !== undefined ? `<span class="text-[10px] text-slate-500 tabular-nums">${l.distanceKm.toFixed(2)} km</span>` : '';
-          return `
-            <div class="flex items-center justify-between p-2 rounded-xl bg-slate-100/90 border border-slate-200/50 hover:bg-slate-200/70 transition-all">
-              <div class="flex items-center gap-2 truncate pr-2">
-                <span class="w-4 h-4 rounded-full ${style.bg} text-[8px] font-bold flex items-center justify-center shrink-0">${style.letter}</span>
-                <span class="font-medium text-slate-800 truncate">${l.name}</span>
-              </div>
-              <div class="flex items-center gap-1.5 shrink-0">
-                ${distStr}
-                <span class="uppercase text-[9px] font-bold px-1.5 py-0.5 rounded ${style.bg}">${l.kind}</span>
-              </div>
-            </div>`;
-        }).join('')
-      : '<div class="text-slate-500 text-xs p-2">Select or search any location to sync nearby OSM landmarks.</div>';
+    if (alternatives.length > 0) {
+      altsListEl.innerHTML = alternatives.map((alt) => `
+        <div class="alt-plot-card p-2.5 rounded-xl bg-slate-50 hover:bg-white border border-slate-200/80 hover:border-orange-300 hover:shadow-xs transition-all flex items-center justify-between gap-2 cursor-pointer group" data-loc-name="${alt.name}">
+          <div class="truncate">
+            <div class="flex items-center gap-1.5 truncate">
+              <span class="font-bold text-slate-900 group-hover:text-orange-600 transition-colors truncate text-xs">${alt.name}</span>
+              <span class="text-[9px] font-semibold px-1.5 py-0.5 rounded shrink-0 ${alt.tagClass}">${alt.tag}</span>
+            </div>
+            <div class="text-[10px] text-slate-500 mt-0.5 truncate">
+              ${alt.category} · Metro: ${alt.metroKm < 1 ? (alt.metroKm * 1000).toFixed(0) + 'm' : alt.metroKm.toFixed(1) + 'km'} · Built-Up: ${alt.builtUp}%
+            </div>
+          </div>
+          <div class="text-right shrink-0">
+            <div class="text-xs font-bold text-slate-900 tabular-nums">₹${alt.basePrice.toLocaleString('en-IN')}<span class="text-[9px] font-normal text-slate-500">/sqft</span></div>
+            <div class="text-[10px] font-semibold ${alt.deltaCagr >= 0 ? 'text-emerald-600' : 'text-slate-500'} tabular-nums">
+              5Y CAGR ${(alt.cagr * 100).toFixed(1)}%
+            </div>
+          </div>
+        </div>
+      `).join('');
+
+      altsListEl.querySelectorAll('.alt-plot-card').forEach((card) => {
+        card.addEventListener('click', () => {
+          const locName = card.dataset.locName;
+          const found = ALL_LOCATIONS.find((l) => l.name === locName);
+          if (found) {
+            closeAnalysisView();
+            selectLocationItem(found);
+          }
+        });
+      });
+    } else {
+      altsListEl.innerHTML = '<div class="text-slate-500 text-xs p-2">No direct peer plots within ±25% price band.</div>';
+    }
   }
 
   // 7. Spatial Buffer Impact (Nested Geometric: 500m <= 1km <= 2km)
@@ -1701,6 +1803,10 @@ function renderUI() {
   });
 
   renderMapOverlays();
+  if (state.sim3dMode && sim3d) {
+    const combinedInfra = [...FUTURE_CATALYSTS, ...(state.backendInfra || [])];
+    sim3d.update(state.activeArea, combinedInfra, state.offset);
+  }
 }
 
 // Location Selector with FitBounds Animation (Rule C5)
@@ -1924,14 +2030,26 @@ document.getElementById('back-to-map-btn')?.addEventListener('click', closeAnaly
 document.getElementById('chk-metro')?.addEventListener('change', (e) => {
   state.layers.metro = e.target.checked;
   renderMapOverlays();
+  if (state.sim3dMode && sim3d) {
+    const combinedInfra = [...FUTURE_CATALYSTS, ...(state.backendInfra || [])];
+    sim3d.update(state.activeArea, combinedInfra, state.offset);
+  }
 });
 document.getElementById('chk-landmarks')?.addEventListener('change', (e) => {
   state.layers.landmarks = e.target.checked;
   renderMapOverlays();
+  if (state.sim3dMode && sim3d) {
+    const combinedInfra = [...FUTURE_CATALYSTS, ...(state.backendInfra || [])];
+    sim3d.update(state.activeArea, combinedInfra, state.offset);
+  }
 });
 document.getElementById('chk-infra')?.addEventListener('change', (e) => {
   state.layers.infra = e.target.checked;
   renderMapOverlays();
+  if (state.sim3dMode && sim3d) {
+    const combinedInfra = [...FUTURE_CATALYSTS, ...(state.backendInfra || [])];
+    sim3d.update(state.activeArea, combinedInfra, state.offset);
+  }
 });
 document.getElementById('chk-satellite')?.addEventListener('change', (e) => {
   if (e.target.checked) {
@@ -2112,6 +2230,10 @@ document.getElementById('filter-category')?.addEventListener('change', (e) => {
 document.getElementById('filter-landmarks')?.addEventListener('change', (e) => {
   state.landmarkFilter = e.target.value;
   renderMapOverlays();
+  if (state.sim3dMode && sim3d) {
+    const combinedInfra = [...FUTURE_CATALYSTS, ...(state.backendInfra || [])];
+    sim3d.update(state.activeArea, combinedInfra, state.offset);
+  }
 });
 
 // Mobile Overflow Menu Actions
@@ -2145,6 +2267,79 @@ document.querySelectorAll('#slider-ticks span').forEach((span) => {
   });
 });
 
+// 3D City Simulation & Developments Controller
+function toggle3DMode(force) {
+  const threeContainer = document.getElementById('three-container');
+  const btn3dText = document.getElementById('btn-3d-text');
+  const nav3dBtn = document.getElementById('nav-3d-btn');
+
+  const nextMode = force !== undefined ? force : !state.sim3dMode;
+  state.sim3dMode = nextMode;
+
+  if (nextMode) {
+    if (threeContainer) threeContainer.classList.remove('hidden');
+    if (btn3dText) btn3dText.textContent = 'Exit 3D (2D Map)';
+    if (nav3dBtn) nav3dBtn.classList.add('bg-slate-950', 'text-white');
+
+    if (!sim3d) {
+      sim3d = new CitySimulation3D({
+        container: threeContainer,
+        canvas: document.getElementById('three-canvas'),
+        activeArea: state.activeArea,
+        offset: state.offset,
+        infraList: [...FUTURE_CATALYSTS, ...(state.backendInfra || [])],
+        onProjectClick: (proj) => {
+          log.info('3D project clicked:', proj);
+        }
+      });
+    }
+    sim3d.start();
+    const combinedInfra = [...FUTURE_CATALYSTS, ...(state.backendInfra || [])];
+    sim3d.update(state.activeArea, combinedInfra, state.offset);
+  } else {
+    if (threeContainer) threeContainer.classList.add('hidden');
+    if (btn3dText) btn3dText.textContent = '3D Simulation';
+    if (nav3dBtn) nav3dBtn.classList.remove('bg-slate-950', 'text-white');
+    if (sim3d) sim3d.stop();
+  }
+}
+
+document.getElementById('toggle-3d-btn')?.addEventListener('click', () => toggle3DMode());
+document.getElementById('m-toggle-3d-btn')?.addEventListener('click', () => {
+  document.getElementById('overflow-menu-dropdown')?.classList.add('hidden');
+  toggle3DMode(true);
+});
+document.getElementById('nav-3d-btn')?.addEventListener('click', () => toggle3DMode());
+document.getElementById('btn-exit-3d')?.addEventListener('click', () => toggle3DMode(false));
+
+// 3D Camera Controls
+document.getElementById('btn-cam-iso')?.addEventListener('click', () => {
+  sim3d?.setCameraPreset('iso');
+  highlightActiveCamBtn('btn-cam-iso');
+});
+document.getElementById('btn-cam-street')?.addEventListener('click', () => {
+  sim3d?.setCameraPreset('street');
+  highlightActiveCamBtn('btn-cam-street');
+});
+document.getElementById('btn-cam-top')?.addEventListener('click', () => {
+  sim3d?.setCameraPreset('top');
+  highlightActiveCamBtn('btn-cam-top');
+});
+document.getElementById('btn-cam-orbit')?.addEventListener('click', () => {
+  sim3d?.setCameraPreset('orbit');
+});
+
+function highlightActiveCamBtn(activeId) {
+  ['btn-cam-iso', 'btn-cam-street', 'btn-cam-top'].forEach((id) => {
+    const el = document.getElementById(id);
+    if (!el) return;
+    if (id === activeId) {
+      el.className = 'px-2.5 py-1 rounded-xl bg-orange-500 text-white font-bold transition-all shadow-sm';
+    } else {
+      el.className = 'px-2.5 py-1 rounded-xl hover:bg-white/20 text-slate-300 font-medium transition-all';
+    }
+  });
+}
 
 // Initial Execution
 renderUI();

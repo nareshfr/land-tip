@@ -148,7 +148,8 @@ def analyze_parcel(req: ParcelRequest) -> ParcelAnalysisResponse:
 
     # Historical price points (last 5 years)
     from app.calibration.data import get_historical_prices
-    hist_raw = get_historical_prices(req.location, limit=5)
+    target_loc = anchor_name or req.location
+    hist_raw = get_historical_prices(target_loc, limit=5, target_price_2026=adjusted_sqft)
     historical_points = [HistoricalPoint(**h) for h in hist_raw]
 
     # Infrastructure milestones with cited sources, strict locality scoping (A1), and distance decay (A2)
